@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { items } = body;
+    const { items, shippingInfo, paymentInfo, isGuest } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
@@ -65,6 +65,23 @@ export async function POST(request: Request) {
           userId: session.user.id,
           total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
           status: 'PENDING',
+          shippingInfo: shippingInfo ? {
+            create: {
+              firstName: shippingInfo.firstName,
+              lastName: shippingInfo.lastName,
+              email: shippingInfo.email,
+              address: shippingInfo.address,
+              city: shippingInfo.city,
+              postalCode: shippingInfo.postalCode,
+            }
+          } : undefined,
+          paymentInfo: paymentInfo ? {
+            create: {
+              cardNumber: paymentInfo.cardNumber,
+              expiryDate: paymentInfo.expiryDate,
+            }
+          } : undefined,
+          isGuest: isGuest || false,
           items: {
             create: items.map(item => ({
               productId: item.productId,
@@ -75,6 +92,8 @@ export async function POST(request: Request) {
         },
         include: {
           items: true,
+          shippingInfo: true,
+          paymentInfo: true,
         },
       });
 
