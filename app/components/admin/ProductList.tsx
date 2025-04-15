@@ -9,9 +9,9 @@ interface Product {
   description: string;
   price: number;
   stock: number;
-  category: {
+  Category: {
     name: string;
-  };
+  } | null;
 }
 
 interface ProductListProps {
@@ -75,7 +75,7 @@ export default function ProductList({ products }: ProductListProps) {
                 </div>
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
-                <div className="text-sm text-gray-900">{product.category.name}</div>
+                <div className="text-sm text-gray-900">{product.Category?.name || 'Uncategorized'}</div>
               </td>
               <td className="px-6 py-4 whitespace-nowrap">
                 <div className="text-sm text-gray-900">
