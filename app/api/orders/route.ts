@@ -2,15 +2,18 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/auth-options';
 import { prisma } from '@/lib/prisma';
-import { PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    const body = await request.json();
-    const { items, shippingInfo, paymentInfo, isGuest } = body;
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
-    // Validate required fields
+    const body = await request.json();
+    const { items } = body;
+
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
         { error: 'Items are required' },
@@ -18,103 +21,35 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!shippingInfo || !paymentInfo) {
-      return NextResponse.json(
-        { error: 'Shipping and payment information are required' },
-        { status: 400 }
-      );
-    }
-
-    // Create a guest user if needed
-    let userId = session?.user?.id;
-    if (isGuest && !userId) {
-      const guestUser = await prisma.user.create({
-        data: {
-          email: shippingInfo.email,
-          name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-          role: 'USER',
-          password: 'guest', // This is just a placeholder, guest users can't log in
-        },
-      });
-      userId = guestUser.id;
-    }
-
-    // Calculate total
-    const total = items.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
-
     // Create order with items
-    const order = await prisma.$transaction(async (tx: PrismaClient) => {
-      try {
-        // Create the order
-        const newOrder = await tx.order.create({
-          data: {
-            userId,
-            total,
-            status: 'PENDING',
-            shippingInfo: {
-              firstName: shippingInfo.firstName,
-              lastName: shippingInfo.lastName,
-              email: shippingInfo.email,
-              address: shippingInfo.address,
-              city: shippingInfo.city,
-              postalCode: shippingInfo.postalCode,
-            },
-            paymentInfo: {
-              cardNumber: paymentInfo.cardNumber,
-              expiryDate: paymentInfo.expiryDate,
-            },
-            isGuest,
-          },
-        });
-
-        // Create order items and update stock
-        for (const item of items) {
-          // Check stock availability
-          const product = await tx.product.findUnique({
-            where: { id: item.id },
-          });
-
-          if (!product) {
-            throw new Error(`Product ${item.id} not found`);
-          }
-
-          if (product.stock < item.quantity) {
-            throw new Error(`Insufficient stock for product ${product.name}. Available: ${product.stock}, Requested: ${item.quantity}`);
-          }
-
-          // Create order item
-          await tx.orderItem.create({
-            data: {
-              orderId: newOrder.id,
-              productId: item.id,
+    const order = await prisma.$transaction(async (tx) => {
+      // Create the order
+      const newOrder = await tx.order.create({
+        data: {
+          userId: session.user.id,
+          total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+          status: 'PENDING',
+          items: {
+            create: items.map(item => ({
+              productId: item.productId,
               quantity: item.quantity,
               price: item.price,
-            },
-          });
+            })),
+          },
+        },
+        include: {
+          items: true,
+        },
+      });
 
-          // Update product stock
-          await tx.product.update({
-            where: { id: item.id },
-            data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
-          });
-        }
-
-        return newOrder;
-      } catch (error) {
-        console.error('Transaction error:', error);
-        throw error;
-      }
+      return newOrder;
     });
 
     return NextResponse.json(order);
   } catch (error) {
     console.error('Error creating order:', error);
     return NextResponse.json(
-      { error: 'Failed to create order', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: 'Failed to create order' },
       { status: 500 }
     );
   }
