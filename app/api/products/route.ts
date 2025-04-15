@@ -5,6 +5,12 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
+    console.log('Attempting to fetch products...');
+    
+    // Test database connection
+    await prisma.$connect();
+    console.log('Database connection successful');
+
     const products = await prisma.product.findMany({
       include: {
         Category: true,
@@ -14,13 +20,35 @@ export async function GET() {
         createdAt: 'desc',
       },
     });
-    return NextResponse.json(products);
+
+    console.log(`Found ${products.length} products`);
+    
+    // Return empty array if no products found
+    return NextResponse.json(products || []);
   } catch (error) {
-    console.error('Error fetching products:', error);
+    console.error('Error in products API:', error);
+    
+    // Check if it's a database connection error
+    if (error instanceof Error && error.message.includes('connect')) {
+      return NextResponse.json(
+        { 
+          error: 'Database connection error',
+          details: error.message
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json(
-      { error: 'Failed to fetch products' },
+      { 
+        error: 'Failed to fetch products',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
+  } finally {
+    // Always disconnect from the database
+    await prisma.$disconnect();
   }
 }
 

@@ -46,7 +46,8 @@ export default function ShopPage() {
     try {
       const response = await fetch('/api/products');
       if (!response.ok) {
-        throw new Error('Failed to fetch products');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch products');
       }
       const data = await response.json();
       setProducts(data);
@@ -165,8 +166,28 @@ export default function ShopPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen pt-16 flex items-center justify-center bg-offwhite">
-        <p className="text-red-600">{error}</p>
+      <div className="min-h-screen pt-16 flex flex-col items-center justify-center bg-offwhite px-4">
+        <p className="text-red-600 mb-4">{error}</p>
+        <button
+          onClick={fetchProducts}
+          className="px-4 py-2 bg-black text-white rounded hover:bg-gray-800 transition-colors"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
+
+  if (!loading && products.length === 0) {
+    return (
+      <div className="min-h-screen pt-16 flex flex-col items-center justify-center bg-offwhite px-4">
+        <p className="text-gray-600 mb-4">No products available at the moment.</p>
+        <button
+          onClick={fetchProducts}
+          className="px-4 py-2 bg-black text-white rounded hover:bg-gray-800 transition-colors"
+        >
+          Refresh
+        </button>
       </div>
     );
   }
