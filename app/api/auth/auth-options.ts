@@ -1,5 +1,4 @@
-import NextAuth from 'next-auth';
-import { authOptions } from '@/app/api/auth/auth-options';
+import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { prisma } from '@/lib/prisma';
 import { compare } from 'bcryptjs';
@@ -52,31 +51,16 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = user.role as string;
+        token.role = user.role;
       }
       return token;
     },
     async session({ session, token }) {
-      if (token) {
+      if (session.user) {
         session.user.id = token.id as string;
         session.user.role = token.role as string;
       }
       return session;
     },
   },
-};
-
-// Add type declaration for the session
-declare module 'next-auth' {
-  interface Session {
-    user: {
-      id: string;
-      email: string;
-      name: string;
-      role: string;
-    }
-  }
-}
-
-const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST }; 
+}; 
