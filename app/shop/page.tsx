@@ -44,16 +44,36 @@ export default function ShopPage() {
 
   const fetchProducts = async () => {
     try {
-      const response = await fetch('/api/products');
+      setLoading(true);
+      setError(null);
+      
+      const response = await fetch('/api/products', {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to fetch products');
       }
+
       const data = await response.json();
+      
+      if (!Array.isArray(data)) {
+        throw new Error('Invalid response format');
+      }
+
       setProducts(data);
     } catch (error) {
       console.error('Error fetching products:', error);
       setError(error instanceof Error ? error.message : 'Failed to load products');
+      
+      // Retry after 5 seconds if there's an error
+      setTimeout(() => {
+        fetchProducts();
+      }, 5000);
     } finally {
       setLoading(false);
     }

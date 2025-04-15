@@ -3,11 +3,14 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/auth-options";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET() {
   try {
     console.log('Attempting to fetch products...');
     
-    // Test database connection
+    // Ensure database connection
     await prisma.$connect();
     console.log('Database connection successful');
 
@@ -23,8 +26,13 @@ export async function GET() {
 
     console.log(`Found ${products.length} products`);
     
-    // Return empty array if no products found
-    return NextResponse.json(products || []);
+    // Always return an array, even if empty
+    return NextResponse.json(products || [], {
+      status: 200,
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+      },
+    });
   } catch (error) {
     console.error('Error in products API:', error);
     
@@ -35,7 +43,12 @@ export async function GET() {
           error: 'Database connection error',
           details: error.message
         },
-        { status: 500 }
+        { 
+          status: 500,
+          headers: {
+            'Cache-Control': 'no-store, max-age=0',
+          },
+        }
       );
     }
 
@@ -44,7 +57,12 @@ export async function GET() {
         error: 'Failed to fetch products',
         details: error instanceof Error ? error.message : 'Unknown error'
       },
-      { status: 500 }
+      { 
+        status: 500,
+        headers: {
+          'Cache-Control': 'no-store, max-age=0',
+        },
+      }
     );
   } finally {
     // Always disconnect from the database
