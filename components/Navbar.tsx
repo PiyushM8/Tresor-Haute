@@ -87,12 +87,17 @@ export default function Navbar() {
               <div className="relative">
                 <Link
                   href="/cart"
-                  className="relative p-1 rounded-full text-gold-600 hover:text-gold-500 transition-colors duration-300"
+                  className="relative px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-700 hover:text-white"
+                  onClick={handleCartClick}
                 >
-                  <ShoppingBagIcon className="h-6 w-6" />
-                  {cartCount > 0 && (
-                    <span className="absolute bottom-0 left-0 -translate-x-1/4 translate-y-1/4 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                      {cartCount}
+                  <ShoppingBagIcon className="h-5 w-5" />
+                  {items.length > 0 && (
+                    <span
+                      className={`absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center ${
+                        showNotification ? 'animate-bounce' : ''
+                      }`}
+                    >
+                      {items.length}
                     </span>
                   )}
                 </Link>
