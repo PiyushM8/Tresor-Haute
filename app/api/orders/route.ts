@@ -7,10 +7,6 @@ import { Prisma } from '@prisma/client';
 export async function POST(request: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const body = await request.json();
     const { items, shippingInfo, paymentInfo, isGuest } = body;
 
@@ -29,6 +25,24 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+    }
+
+    // For guest users, we need to create a temporary user
+    let userId = session?.user?.id;
+    if (isGuest && !userId) {
+      const guestUser = await prisma.user.create({
+        data: {
+          name: shippingInfo.firstName + ' ' + shippingInfo.lastName,
+          email: shippingInfo.email,
+          password: Math.random().toString(36).slice(-8), // Temporary password
+          role: 'USER',
+        },
+      });
+      userId = guestUser.id;
+    }
+
+    if (!userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Create order with items
@@ -62,7 +76,7 @@ export async function POST(request: Request) {
       // Create the order
       const newOrder = await tx.order.create({
         data: {
-          userId: session.user.id,
+          userId,
           total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
           status: 'PENDING',
           shippingInfo: shippingInfo ? {
