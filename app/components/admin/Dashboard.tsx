@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
+import { Role } from '@prisma/client';
 
 interface Product {
   id: string;
@@ -33,13 +34,13 @@ export default function Dashboard() {
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/signin');
-    } else if (session?.user?.role !== 'admin') {
+    } else if (session?.user?.role !== Role.ADMIN) {
       router.push('/');
     }
   }, [status, session, router]);
 
   useEffect(() => {
-    if (session?.user?.role === 'admin') {
+    if (session?.user?.role === Role.ADMIN) {
       fetchData();
     }
   }, [session]);
@@ -106,7 +107,6 @@ export default function Dashboard() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="bg-white shadow rounded-lg p-6"
         >
           {activeTab === 'products' ? (
             <div>
@@ -119,27 +119,23 @@ export default function Dashboard() {
                   Add Product
                 </button>
               </div>
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {products.map((product) => (
                   <motion.div
                     key={product.id}
-                    whileHover={{ scale: 1.02 }}
+                    whileHover={{ scale: 1.01 }}
                     className="bg-white rounded-lg shadow overflow-hidden"
                   >
-                    <img
-                      src={product.image}
-                      alt={product.name}
-                      className="w-full h-48 object-cover"
-                    />
-                    <div className="p-4">
+                    <div className="p-6">
                       <h3 className="text-lg font-medium text-gray-900">
                         {product.name}
                       </h3>
                       <p className="mt-1 text-sm text-gray-500">
-                        {product.description}
+                        {product.category}
                       </p>
-                      <p className="mt-2 text-lg font-medium text-gray-900">
-                        ${product.price}
+                      <p className="mt-2 text-gray-600">{product.description}</p>
+                      <p className="mt-2 font-medium text-gray-900">
+                        ${product.price.toFixed(2)}
                       </p>
                       <div className="mt-4 flex space-x-2">
                         <button
@@ -238,4 +234,4 @@ export default function Dashboard() {
       }
     }
   }
-} 
+}
