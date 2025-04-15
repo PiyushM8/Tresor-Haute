@@ -1,5 +1,5 @@
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { authOptions } from '@/app/api/auth/auth-options';
 import { prisma } from '@/lib/prisma';
 import { useRouter } from 'next/navigation';
 import ProductList from '@/app/components/admin/ProductList';
