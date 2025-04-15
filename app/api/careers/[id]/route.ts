@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/auth-options';
 import { prisma } from '@/lib/prisma';
+import { Role } from '@prisma/client';
 
 export async function PUT(
   request: Request,
@@ -9,7 +10,7 @@ export async function PUT(
 ) {
   const session = await getServerSession(authOptions);
 
-  if (!session || session.user.role !== 'admin') {
+  if (!session || session.user.role !== Role.ADMIN) {
     return NextResponse.json(
       { error: 'Unauthorized' },
       { status: 401 }
@@ -53,16 +54,16 @@ export async function DELETE(
   request: Request,
   { params }: { params: { id: string } }
 ) {
-  const session = await getServerSession(authOptions);
-
-  if (!session || session.user.role !== 'admin') {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-
   try {
+    const session = await getServerSession(authOptions);
+
+    if (!session || session.user.role !== Role.ADMIN) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     await prisma.career.delete({
       where: {
         id: params.id,
