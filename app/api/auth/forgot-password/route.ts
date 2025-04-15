@@ -3,11 +3,11 @@ import { prisma } from '@/lib/prisma';
 import { randomBytes } from 'crypto';
 import { Resend } from 'resend';
 
-if (!process.env.RESEND_API_KEY) {
-  throw new Error('RESEND_API_KEY environment variable is not set');
-}
+let resend: Resend | null = null;
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+if (process.env.RESEND_API_KEY) {
+  resend = new Resend(process.env.RESEND_API_KEY);
+}
 
 export async function POST(request: Request) {
   try {
@@ -44,22 +44,24 @@ export async function POST(request: Request) {
       },
     });
 
-    // Send reset email
-    const resetUrl = `${process.env.NEXTAUTH_URL}/reset-password?token=${resetToken}`;
-    
-    await resend.emails.send({
-      from: 'Tresor Haute <noreply@tresorhaute.com>',
-      to: email,
-      subject: 'Password Reset Request',
-      html: `
-        <h1>Password Reset Request</h1>
-        <p>You requested a password reset for your Tresor Haute account.</p>
-        <p>Click the link below to reset your password:</p>
-        <a href="${resetUrl}">Reset Password</a>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you didn't request this, please ignore this email.</p>
-      `,
-    });
+    // Send reset email if Resend is configured
+    if (resend) {
+      const resetUrl = `${process.env.NEXTAUTH_URL}/reset-password?token=${resetToken}`;
+      
+      await resend.emails.send({
+        from: 'Tresor Haute <noreply@tresorhaute.com>',
+        to: email,
+        subject: 'Password Reset Request',
+        html: `
+          <h1>Password Reset Request</h1>
+          <p>You requested a password reset for your Tresor Haute account.</p>
+          <p>Click the link below to reset your password:</p>
+          <a href="${resetUrl}">Reset Password</a>
+          <p>This link will expire in 1 hour.</p>
+          <p>If you didn't request this, please ignore this email.</p>
+        `,
+      });
+    }
 
     return NextResponse.json(
       { message: 'Password reset email sent' },
