@@ -1,6 +1,6 @@
 {
   "name": "tresor-haute",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint"
   },
+  // Trigger redeploy for Resend API key
   "dependencies": {
     "@auth/prisma-adapter": "^2.8.0",
     "@headlessui/react": "^1.7.18",
