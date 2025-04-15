@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/auth-options';
 import { prisma } from '@/lib/prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, OrderStatus } from '@prisma/client';
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +10,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { items, shippingInfo, paymentInfo, isGuest } = body;
 
+    // Validate required fields
     if (!items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
         { error: 'Items are required' },
@@ -27,9 +28,41 @@ export async function POST(request: Request) {
       }
     }
 
+    // Validate shipping info if provided
+    if (shippingInfo) {
+      const requiredShippingFields = ['firstName', 'lastName', 'email', 'address', 'city', 'postalCode'];
+      for (const field of requiredShippingFields) {
+        if (!shippingInfo[field]) {
+          return NextResponse.json(
+            { error: `Missing required shipping field: ${field}` },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
+    // Validate payment info if provided
+    if (paymentInfo) {
+      const requiredPaymentFields = ['cardNumber', 'expiryDate'];
+      for (const field of requiredPaymentFields) {
+        if (!paymentInfo[field]) {
+          return NextResponse.json(
+            { error: `Missing required payment field: ${field}` },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     // For guest users, we need to create a temporary user
     let userId = session?.user?.id;
     if (isGuest && !userId) {
+      if (!shippingInfo) {
+        return NextResponse.json(
+          { error: 'Shipping info is required for guest orders' },
+          { status: 400 }
+        );
+      }
       const guestUser = await prisma.user.create({
         data: {
           name: shippingInfo.firstName + ' ' + shippingInfo.lastName,
@@ -57,7 +90,8 @@ export async function POST(request: Request) {
         },
         select: {
           id: true,
-          stock: true
+          stock: true,
+          price: true
         }
       });
 
@@ -65,51 +99,64 @@ export async function POST(request: Request) {
         throw new Error('One or more products not found');
       }
 
-      // Check stock
+      // Check stock and validate prices
       for (const item of items) {
         const product = products.find(p => p.id === item.productId);
-        if (!product || product.stock < item.quantity) {
-          throw new Error('Insufficient stock for one or more products');
+        if (!product) {
+          throw new Error(`Product not found: ${item.productId}`);
+        }
+        if (product.stock < item.quantity) {
+          throw new Error(`Insufficient stock for product: ${item.productId}`);
+        }
+        if (product.price !== item.price) {
+          throw new Error(`Price mismatch for product: ${item.productId}`);
         }
       }
 
-      // Create the order
+      // Create the order first
       const newOrder = await tx.order.create({
         data: {
-          userId,
+          user: { connect: { id: userId } },
           total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
-          status: 'PENDING',
-          shippingInfo: shippingInfo ? {
-            create: {
-              firstName: shippingInfo.firstName,
-              lastName: shippingInfo.lastName,
-              email: shippingInfo.email,
-              address: shippingInfo.address,
-              city: shippingInfo.city,
-              postalCode: shippingInfo.postalCode,
-            }
-          } : undefined,
-          paymentInfo: paymentInfo ? {
-            create: {
-              cardNumber: paymentInfo.cardNumber,
-              expiryDate: paymentInfo.expiryDate,
-            }
-          } : undefined,
-          isGuest: isGuest || false,
-          items: {
-            create: items.map(item => ({
-              productId: item.productId,
-              quantity: item.quantity,
-              price: item.price,
-            })),
-          },
-        },
-        include: {
-          items: true,
-          shippingInfo: true,
-          paymentInfo: true,
+          status: OrderStatus.PENDING,
         },
       });
+
+      // Create order items
+      await tx.orderItem.createMany({
+        data: items.map(item => ({
+          orderId: newOrder.id,
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+        })),
+      });
+
+      // Create shipping info if provided
+      if (shippingInfo) {
+        await tx.shippingInfo.create({
+          data: {
+            orderId: newOrder.id,
+            firstName: shippingInfo.firstName,
+            lastName: shippingInfo.lastName,
+            email: shippingInfo.email,
+            address: shippingInfo.address,
+            city: shippingInfo.city,
+            postalCode: shippingInfo.postalCode,
+          },
+        });
+      }
+
+      // Create payment info if provided
+      if (paymentInfo) {
+        await tx.paymentInfo.create({
+          data: {
+            orderId: newOrder.id,
+            cardNumber: paymentInfo.cardNumber,
+            expiryDate: paymentInfo.expiryDate,
+          },
+        });
+      }
 
       // Update product stock
       await Promise.all(
@@ -120,6 +167,12 @@ export async function POST(request: Request) {
           })
         )
       );
+
+      // Update the order with isGuest flag
+      await tx.order.update({
+        where: { id: newOrder.id },
+        data: { isGuest: isGuest || false },
+      });
 
       return newOrder;
     });
