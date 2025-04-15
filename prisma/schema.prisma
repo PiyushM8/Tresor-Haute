@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -14,23 +8,23 @@ datasource db {
 }
 
 model User {
-  id              String    @id @default(cuid())
-  name            String
-  email           String    @unique
-  emailVerified   DateTime?
-  password        String
-  image           String?
-  role            Role      @default(USER)
-  resetToken      String?
+  id               String    @id @default(cuid())
+  name             String
+  email            String    @unique
+  emailVerified    DateTime?
+  image            String?
+  password         String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  resetToken       String?
   resetTokenExpiry DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  accounts        Account[]
-  sessions        Session[]
-  cart            Cart?
-  orders          Order[]
-  reviews         Review[]
-  favorites       Product[] @relation("UserFavorites")
+  role             Role      @default(USER)
+  accounts         Account[]
+  cart             Cart?
+  reviews          Review[]
+  sessions         Session[]
+  orders           Order[]
+  favorites        Product[] @relation("UserFavorites")
 }
 
 model Account {
@@ -39,15 +33,14 @@ model Account {
   type              String
   provider          String
   providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
+  refresh_token     String?
+  access_token      String?
   expires_at        Int?
   token_type        String?
   scope             String?
-  id_token          String? @db.Text
+  id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
@@ -73,17 +66,17 @@ model Product {
   name         String
   description  String
   price        Float
-  images       String[]
-  category     String
-  stock        Int            @default(0)
+  categoryId   String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
+  category     String
+  images       String[]
+  stock        Int            @default(0)
   cartItems    CartItem[]
-  orderItems   OrderItem[]
-  reviews      Review[]
-  ProductImage ProductImage[]
   Category     Category?      @relation(fields: [categoryId], references: [id])
-  categoryId   String?
+  ProductImage ProductImage[]
+  reviews      Review[]
+  orderItems   OrderItem[]
   favoritedBy  User[]         @relation("UserFavorites")
 }
 
@@ -104,37 +97,37 @@ model Category {
 model Cart {
   id        String     @id @default(cuid())
   userId    String     @unique
-  user      User       @relation(fields: [userId], references: [id])
-  items     CartItem[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id])
+  items     CartItem[]
 }
 
 model CartItem {
   id        String   @id @default(cuid())
   cartId    String
-  cart      Cart     @relation(fields: [cartId], references: [id])
   productId String
-  product   Product  @relation(fields: [productId], references: [id])
   quantity  Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
 
   @@unique([cartId, productId])
 }
 
 model Order {
   id           String        @id @default(cuid())
-  user         User          @relation(fields: [userId], references: [id])
   userId       String
-  items        OrderItem[]
   total        Float
   status       OrderStatus   @default(PENDING)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  shippingInfo ShippingInfo?
-  paymentInfo  PaymentInfo?
   isGuest      Boolean       @default(false)
+  items        OrderItem[]
+  user         User          @relation(fields: [userId], references: [id])
+  paymentInfo  PaymentInfo?
+  shippingInfo ShippingInfo?
 
   @@index([userId])
   @@map("orders")
@@ -142,14 +135,14 @@ model Order {
 
 model OrderItem {
   id        String   @id @default(cuid())
-  order     Order    @relation(fields: [orderId], references: [id])
   orderId   String
-  product   Product  @relation(fields: [productId], references: [id])
   productId String
   quantity  Int
   price     Float
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  order     Order    @relation(fields: [orderId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
 
   @@index([orderId])
   @@index([productId])
@@ -158,7 +151,6 @@ model OrderItem {
 
 model ShippingInfo {
   id         String   @id @default(cuid())
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderId    String   @unique
   firstName  String
   lastName   String
@@ -168,18 +160,19 @@ model ShippingInfo {
   postalCode String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("shipping_info")
 }
 
 model PaymentInfo {
   id         String   @id @default(cuid())
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   orderId    String   @unique
   cardNumber String
   expiryDate String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("payment_info")
 }
@@ -187,13 +180,13 @@ model PaymentInfo {
 model Review {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   productId String
-  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   rating    Int
   comment   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Career {

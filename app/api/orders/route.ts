@@ -1,197 +1,171 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/app/api/auth/auth-options';
+import { authOptions } from '../auth/auth-options';
 import { prisma } from '@/lib/prisma';
-import { Prisma, OrderStatus } from '@prisma/client';
+import { OrderStatus, Role, Prisma } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
-export async function POST(request: Request) {
+// Define types for request body
+interface OrderItem {
+  productId: string;
+  quantity: number;
+}
+
+interface ShippingInfoInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  address: string;
+  city: string;
+  postalCode: string;
+}
+
+interface PaymentInfoInput {
+  cardNumber: string;
+  expiryDate: string;
+}
+
+interface OrderRequestBody {
+  items: OrderItem[];
+  shippingInfo: ShippingInfoInput;
+  paymentInfo: PaymentInfoInput;
+}
+
+export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    const body = await request.json();
-    const { items, shippingInfo, paymentInfo, isGuest } = body;
+    const body = await req.json() as OrderRequestBody;
+    const { items, shippingInfo, paymentInfo } = body;
 
     // Validate required fields
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    if (!items?.length || !shippingInfo || !paymentInfo) {
       return NextResponse.json(
-        { error: 'Items are required' },
+        { error: 'Missing required fields' },
         { status: 400 }
       );
     }
 
-    // Validate items
+    // Calculate total and validate products
+    let total = 0;
+    const productIds = items.map(item => item.productId);
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+    });
+
+    if (products.length !== items.length) {
+      return NextResponse.json(
+        { error: 'One or more products not found' },
+        { status: 400 }
+      );
+    }
+
+    // Check stock and calculate total
     for (const item of items) {
-      if (!item.productId || !item.quantity || !item.price) {
+      const product = products.find((p) => p.id === item.productId);
+      if (!product) continue;
+      
+      if (product.stock < item.quantity) {
         return NextResponse.json(
-          { error: 'Invalid item data' },
+          { error: `Insufficient stock for product: ${product.name}` },
           { status: 400 }
         );
       }
+      total += product.price * item.quantity;
     }
 
-    // Validate shipping info if provided
-    if (shippingInfo) {
-      const requiredShippingFields = ['firstName', 'lastName', 'email', 'address', 'city', 'postalCode'];
-      for (const field of requiredShippingFields) {
-        if (!shippingInfo[field]) {
-          return NextResponse.json(
-            { error: `Missing required shipping field: ${field}` },
-            { status: 400 }
-          );
-        }
-      }
-    }
-
-    // Validate payment info if provided
-    if (paymentInfo) {
-      const requiredPaymentFields = ['cardNumber', 'expiryDate'];
-      for (const field of requiredPaymentFields) {
-        if (!paymentInfo[field]) {
-          return NextResponse.json(
-            { error: `Missing required payment field: ${field}` },
-            { status: 400 }
-          );
-        }
-      }
-    }
-
-    // For guest users, we need to create a temporary user
-    let userId = session?.user?.id;
-    if (isGuest && !userId) {
-      if (!shippingInfo) {
-        return NextResponse.json(
-          { error: 'Shipping info is required for guest orders' },
-          { status: 400 }
-        );
-      }
+    // Create or get user
+    let userId: string;
+    if (session?.user) {
+      userId = session.user.id;
+    } else {
+      // Create guest user with hashed password
+      const tempPassword = Math.random().toString(36).slice(-8);
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
       const guestUser = await prisma.user.create({
         data: {
-          name: shippingInfo.firstName + ' ' + shippingInfo.lastName,
+          name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
           email: shippingInfo.email,
-          password: Math.random().toString(36).slice(-8), // Temporary password
-          role: 'USER',
+          password: hashedPassword,
+          role: Role.USER,
         },
       });
       userId = guestUser.id;
     }
 
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    // Create order with items
-    const order = await prisma.$transaction(async (tx) => {
-      // Check if products exist and are in stock
-      const productIds = items.map(item => item.productId);
-      const products = await tx.product.findMany({
-        where: {
-          id: {
-            in: productIds
-          }
-        },
-        select: {
-          id: true,
-          stock: true,
-          price: true
-        }
-      });
-
-      if (products.length !== productIds.length) {
-        throw new Error('One or more products not found');
-      }
-
-      // Check stock and validate prices
-      for (const item of items) {
-        const product = products.find(p => p.id === item.productId);
-        if (!product) {
-          throw new Error(`Product not found: ${item.productId}`);
-        }
-        if (product.stock < item.quantity) {
-          throw new Error(`Insufficient stock for product: ${item.productId}`);
-        }
-        if (product.price !== item.price) {
-          throw new Error(`Price mismatch for product: ${item.productId}`);
-        }
-      }
-
-      // Create the order first
-      const newOrder = await tx.order.create({
+    // Create order and related data in a transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // Create the order
+      const order = await tx.order.create({
         data: {
           user: { connect: { id: userId } },
-          total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+          total,
           status: OrderStatus.PENDING,
+          items: {
+            create: items.map(item => ({
+              product: { connect: { id: item.productId } },
+              quantity: item.quantity,
+              price: products.find(p => p.id === item.productId)?.price || 0,
+            })),
+          },
         },
       });
 
-      // Create order items
-      await tx.orderItem.createMany({
-        data: items.map(item => ({
-          orderId: newOrder.id,
-          productId: item.productId,
-          quantity: item.quantity,
-          price: item.price,
-        })),
+      // Create shipping info
+      await tx.shippingInfo.create({
+        data: {
+          order: { connect: { id: order.id } },
+          firstName: shippingInfo.firstName,
+          lastName: shippingInfo.lastName,
+          email: shippingInfo.email,
+          address: shippingInfo.address,
+          city: shippingInfo.city,
+          postalCode: shippingInfo.postalCode,
+        },
       });
 
-      // Create shipping info if provided
-      if (shippingInfo) {
-        await tx.shippingInfo.create({
-          data: {
-            orderId: newOrder.id,
-            firstName: shippingInfo.firstName,
-            lastName: shippingInfo.lastName,
-            email: shippingInfo.email,
-            address: shippingInfo.address,
-            city: shippingInfo.city,
-            postalCode: shippingInfo.postalCode,
-          },
-        });
-      }
-
-      // Create payment info if provided
-      if (paymentInfo) {
-        await tx.paymentInfo.create({
-          data: {
-            orderId: newOrder.id,
-            cardNumber: paymentInfo.cardNumber,
-            expiryDate: paymentInfo.expiryDate,
-          },
-        });
-      }
+      // Create payment info
+      await tx.paymentInfo.create({
+        data: {
+          order: { connect: { id: order.id } },
+          cardNumber: paymentInfo.cardNumber,
+          expiryDate: paymentInfo.expiryDate,
+        },
+      });
 
       // Update product stock
-      await Promise.all(
-        items.map(item =>
-          tx.product.update({
-            where: { id: item.productId },
-            data: { stock: { decrement: item.quantity } }
-          })
-        )
-      );
+      for (const item of items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
+          },
+        });
+      }
 
-      // Update the order with isGuest flag
-      await tx.order.update({
-        where: { id: newOrder.id },
-        data: { isGuest: isGuest || false },
+      // Return the complete order
+      return tx.order.findUnique({
+        where: { id: order.id },
+        include: {
+          items: {
+            include: {
+              product: true,
+            },
+          },
+          shippingInfo: true,
+          paymentInfo: true,
+        },
       });
-
-      return newOrder;
     });
 
-    return NextResponse.json(order);
+    if (!result) {
+      throw new Error('Failed to create order');
+    }
+
+    return NextResponse.json(result);
   } catch (error) {
     console.error('Error creating order:', error);
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      return NextResponse.json(
-        { error: 'Database error occurred' },
-        { status: 500 }
-      );
-    }
-    if (error instanceof Error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 400 }
-      );
-    }
     return NextResponse.json(
       { error: 'Failed to create order' },
       { status: 500 }
