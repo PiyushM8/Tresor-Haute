@@ -12,12 +12,12 @@ interface ProductFormProps {
     stock: number;
     categoryId: string;
   };
+  onSubmit?: (formData: FormData) => Promise<void>;
+  isLoading?: boolean;
 }
 
-export default function ProductForm({ initialData }: ProductFormProps) {
+export default function ProductForm({ initialData, onSubmit, isLoading }: ProductFormProps) {
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: initialData?.name || '',
     description: initialData?.description || '',
@@ -25,11 +25,27 @@ export default function ProductForm({ initialData }: ProductFormProps) {
     stock: initialData?.stock || 0,
     categoryId: initialData?.categoryId || '',
   });
+  const [images, setImages] = useState<File[]>([]);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    setError(null);
+    setError('');
+
+    if (onSubmit) {
+      const formDataObj = new FormData();
+      formDataObj.append('name', formData.name);
+      formDataObj.append('description', formData.description);
+      formDataObj.append('price', formData.price.toString());
+      formDataObj.append('stock', formData.stock.toString());
+      formDataObj.append('categoryId', formData.categoryId);
+      images.forEach((image) => {
+        formDataObj.append('images', image);
+      });
+
+      await onSubmit(formDataObj);
+      return;
+    }
 
     try {
       const url = initialData
@@ -61,8 +77,6 @@ export default function ProductForm({ initialData }: ProductFormProps) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -178,13 +192,13 @@ export default function ProductForm({ initialData }: ProductFormProps) {
         </select>
       </div>
 
-      <div>
+      <div className="flex justify-end">
         <button
           type="submit"
-          disabled={loading}
-          className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+          disabled={isLoading}
+          className="bg-black text-white px-4 py-2 rounded-md hover:bg-gray-800 disabled:opacity-50"
         >
-          {loading ? 'Saving...' : initialData ? 'Update Product' : 'Add Product'}
+          {isLoading ? 'Saving...' : initialData ? 'Update Product' : 'Create Product'}
         </button>
       </div>
     </form>
