@@ -21,8 +21,44 @@ export async function POST(request: Request) {
       );
     }
 
+    // Validate items
+    for (const item of items) {
+      if (!item.productId || !item.quantity || !item.price) {
+        return NextResponse.json(
+          { error: 'Invalid item data' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Create order with items
     const order = await prisma.$transaction(async (tx) => {
+      // Check if products exist and are in stock
+      const productIds = items.map(item => item.productId);
+      const products = await tx.product.findMany({
+        where: {
+          id: {
+            in: productIds
+          }
+        },
+        select: {
+          id: true,
+          stock: true
+        }
+      });
+
+      if (products.length !== productIds.length) {
+        throw new Error('One or more products not found');
+      }
+
+      // Check stock
+      for (const item of items) {
+        const product = products.find(p => p.id === item.productId);
+        if (!product || product.stock < item.quantity) {
+          throw new Error('Insufficient stock for one or more products');
+        }
+      }
+
       // Create the order
       const newOrder = await tx.order.create({
         data: {
@@ -42,12 +78,34 @@ export async function POST(request: Request) {
         },
       });
 
+      // Update product stock
+      await Promise.all(
+        items.map(item =>
+          tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { decrement: item.quantity } }
+          })
+        )
+      );
+
       return newOrder;
     });
 
     return NextResponse.json(order);
   } catch (error) {
     console.error('Error creating order:', error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return NextResponse.json(
+        { error: 'Database error occurred' },
+        { status: 500 }
+      );
+    }
+    if (error instanceof Error) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
     return NextResponse.json(
       { error: 'Failed to create order' },
       { status: 500 }

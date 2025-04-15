@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { Inter, Cormorant_Garamond } from 'next/font/google';
+import { Inter } from 'next/font/google';
+import { Cormorant_Garamond } from 'next/font/google';
 import './globals.css';
 import Navbar from '@/components/Navbar';
 import Footer from '@/components/Footer';
@@ -7,14 +8,16 @@ import { Providers } from './providers';
 
 const inter = Inter({ 
   subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap'
+  display: 'swap',
+  preload: true,
+  variable: '--font-inter'
 });
 
 const cormorant = Cormorant_Garamond({ 
   subsets: ['latin'],
-  variable: '--font-cormorant',
   display: 'swap',
+  preload: true,
+  variable: '--font-cormorant',
   weight: ['300', '400', '500', '600', '700']
 });
 
