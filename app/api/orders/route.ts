@@ -53,7 +53,7 @@ export async function POST(req: Request) {
 
     // Calculate total and validate stock
     let total = 0;
-    const orderItems: Prisma.OrderItemCreateInput[] = [];
+    const orderItems: Prisma.OrderItemCreateManyOrderInput[] = [];
 
     for (const item of items) {
       const product = await prisma.product.findUnique({
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
 
       total += product.price * item.quantity;
       orderItems.push({
-        product: { connect: { id: item.productId } },
+        productId: item.productId,
         quantity: item.quantity,
         price: product.price
       });
@@ -103,7 +103,9 @@ export async function POST(req: Request) {
         total,
         status: OrderStatus.PENDING,
         items: {
-          create: orderItems
+          createMany: {
+            data: orderItems
+          }
         },
         shippingInfo: {
           create: {
@@ -176,7 +178,11 @@ export async function GET(request: Request) {
     if (session.user.role === Role.ADMIN) {
       const orders = await prisma.order.findMany({
         include: {
-          items: true,
+          items: {
+            include: {
+              product: true
+            }
+          },
           user: {
             select: {
               id: true,
@@ -198,7 +204,11 @@ export async function GET(request: Request) {
         userId: session.user.id,
       },
       include: {
-        items: true
+        items: {
+          include: {
+            product: true
+          }
+        }
       },
       orderBy: {
         createdAt: 'desc',
