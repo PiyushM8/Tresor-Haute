@@ -33,13 +33,19 @@ interface OrderRequestBody {
 
 export async function POST(req: Request) {
   try {
+    console.log('[ORDERS_POST] Starting order creation...');
     const session = await getServerSession(authOptions);
     const body: OrderRequestBody = await req.json();
+    console.log('[ORDERS_POST] Request body:', {
+      ...body,
+      paymentInfo: { ...body.paymentInfo, cardNumber: '[REDACTED]' }
+    });
 
     // Validate required fields
     const { items, shippingInfo, paymentInfo } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
+      console.log('[ORDERS_POST] Invalid items:', items);
       return NextResponse.json(
         { error: "Items are required" },
         { status: 400 }
@@ -47,6 +53,7 @@ export async function POST(req: Request) {
     }
 
     if (!shippingInfo || !validateShippingInfo(shippingInfo)) {
+      console.log('[ORDERS_POST] Invalid shipping info:', shippingInfo);
       return NextResponse.json(
         { error: "Invalid shipping information" },
         { status: 400 }
@@ -54,6 +61,7 @@ export async function POST(req: Request) {
     }
 
     if (!paymentInfo || !validatePaymentInfo(paymentInfo)) {
+      console.log('[ORDERS_POST] Invalid payment info');
       return NextResponse.json(
         { error: "Invalid payment information" },
         { status: 400 }
@@ -66,12 +74,14 @@ export async function POST(req: Request) {
     // Create guest user if no session
     if (!userId) {
       try {
+        console.log('[ORDERS_POST] Creating guest user...');
         const guestEmail = `guest_${Date.now()}@tresor-haute.com`;
         const existingUser = await prisma.user.findUnique({
           where: { email: guestEmail }
         });
 
         if (existingUser) {
+          console.log('[ORDERS_POST] Guest email already exists:', guestEmail);
           return NextResponse.json(
             { error: "Failed to create guest user" },
             { status: 500 }
@@ -88,6 +98,7 @@ export async function POST(req: Request) {
         });
         userId = guestUser.id;
         isGuest = true;
+        console.log('[ORDERS_POST] Guest user created:', { id: userId, isGuest });
       } catch (error) {
         console.error("[ORDERS_POST] Guest user creation error:", error);
         return NextResponse.json(
@@ -102,6 +113,7 @@ export async function POST(req: Request) {
     let total = 0;
 
     try {
+      console.log('[ORDERS_POST] Validating products and stock...');
       await prisma.$transaction(async (tx) => {
         for (const item of items) {
           const product = await tx.product.findUnique({
@@ -129,6 +141,7 @@ export async function POST(req: Request) {
           });
         }
       });
+      console.log('[ORDERS_POST] Products validated, total:', total);
     } catch (error) {
       console.error("[ORDERS_POST] Product validation error:", error);
       return NextResponse.json(
@@ -142,14 +155,8 @@ export async function POST(req: Request) {
 
     // Create the order in a transaction
     try {
+      console.log('[ORDERS_POST] Creating order...');
       const order = await prisma.$transaction(async (tx) => {
-        console.log("[ORDERS_POST] Starting order creation with data:", {
-          userId,
-          total,
-          isGuest,
-          itemsCount: items.length
-        });
-
         const orderData = {
           user: {
             connect: {
@@ -180,87 +187,69 @@ export async function POST(req: Request) {
               expiryDate: paymentInfo.expiryDate
             }
           }
-        } as const;
+        };
 
-        console.log("[ORDERS_POST] Order data prepared:", {
-          ...orderData,
-          shippingInfo: { ...orderData.shippingInfo.create, email: '[REDACTED]' },
-          paymentInfo: { ...orderData.paymentInfo.create, cardNumber: '[REDACTED]' }
+        console.log('[ORDERS_POST] Order data prepared:', {
+          userId,
+          total,
+          isGuest,
+          itemsCount: items.length
         });
 
-        const include = {
-          items: {
-            include: {
-              product: true
-            }
-          },
-          shippingInfo: true,
-          paymentInfo: true,
-          user: {
-            select: {
-              id: true,
-              email: true,
-              name: true
-            }
-          }
-        } as const;
-
-        try {
-          const newOrder = await tx.order.create({
-            data: orderData,
-            include
-          });
-          console.log("[ORDERS_POST] Order created successfully:", newOrder.id);
-
-          // Update product stock
-          for (const item of items) {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: {
-                stock: {
-                  decrement: item.quantity
-                }
+        const newOrder = await tx.order.create({
+          data: orderData,
+          include: {
+            items: {
+              include: {
+                product: true
               }
-            });
+            },
+            user: {
+              select: {
+                id: true,
+                email: true,
+                name: true
+              }
+            }
           }
-          console.log("[ORDERS_POST] Product stock updated successfully");
+        });
 
-          return newOrder;
-        } catch (error) {
-          console.error("[ORDERS_POST] Error creating order:", {
-            error,
-            message: error instanceof Error ? error.message : 'Unknown error',
-            stack: error instanceof Error ? error.stack : undefined
+        console.log('[ORDERS_POST] Order created:', newOrder.id);
+
+        // Update product stock
+        for (const item of items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stock: {
+                decrement: item.quantity
+              }
+            }
           });
-          throw error;
         }
+        console.log('[ORDERS_POST] Product stock updated');
+
+        return newOrder;
       });
 
+      console.log('[ORDERS_POST] Order creation successful');
       return NextResponse.json(order);
     } catch (error) {
-      console.error("[ORDERS_POST] Transaction error:", {
-        error,
-        message: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
-      });
+      console.error("[ORDERS_POST] Transaction error:", error);
       return NextResponse.json(
         { 
           error: "Failed to process order",
-          details: error instanceof Error ? error.message : 'Unknown error'
+          details: error instanceof Error ? error.message : "Unknown error"
         },
         { status: 500 }
       );
     }
   } catch (error) {
-    console.error("[ORDERS_POST] Error details:", {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      error: error
-    });
+    console.error("[ORDERS_POST] Error details:", error);
     return NextResponse.json(
       { 
         error: "Internal error",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : "Unknown error"
       },
       { status: 500 }
     );
