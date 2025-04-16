@@ -164,7 +164,11 @@ export async function POST(req: Request) {
       console.log('[ORDERS_POST] Creating order...');
       const order = await prisma.$transaction(async (tx) => {
         const orderData = {
-          userId,
+          user: {
+            connect: {
+              id: userId
+            }
+          },
           total,
           status: OrderStatus.PENDING,
           isGuest,
