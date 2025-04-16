@@ -175,7 +175,8 @@ export default function ProductForm({ initialData }: ProductFormProps) {
         console.log('Uploading file:', {
           name: file.name,
           type: file.type,
-          size: file.size
+          size: file.size,
+          lastModified: file.lastModified
         });
 
         const response = await fetch('/api/upload', {
@@ -186,8 +187,12 @@ export default function ProductForm({ initialData }: ProductFormProps) {
         const data = await response.json();
 
         if (!response.ok) {
-          console.error('Upload failed:', data);
-          throw new Error(data.error || 'Failed to upload image');
+          console.error('Upload failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            data: data
+          });
+          throw new Error(data.error || `Failed to upload image: ${response.status} ${response.statusText}`);
         }
 
         if (!data.url) {
