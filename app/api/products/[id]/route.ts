@@ -66,6 +66,33 @@ export async function DELETE(
       );
     }
 
+    // First check if the product exists
+    const product = await prisma.product.findUnique({
+      where: { id: params.id },
+      include: {
+        orderItems: true,
+      },
+    });
+
+    if (!product) {
+      return NextResponse.json(
+        { error: 'Product not found' },
+        { status: 404 }
+      );
+    }
+
+    // Check if the product is referenced in any orders
+    if (product.orderItems.length > 0) {
+      return NextResponse.json(
+        { 
+          error: 'Cannot delete product',
+          details: 'This product is referenced in existing orders. Please archive it instead.'
+        },
+        { status: 400 }
+      );
+    }
+
+    // Delete the product
     await prisma.product.delete({
       where: {
         id: params.id,
@@ -75,8 +102,25 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting product:', error);
+    
+    // Handle specific Prisma errors
+    if (error instanceof Error) {
+      if (error.message.includes('foreign key constraint')) {
+        return NextResponse.json(
+          { 
+            error: 'Cannot delete product',
+            details: 'This product is referenced in existing orders. Please archive it instead.'
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     return NextResponse.json(
-      { error: 'Failed to delete product' },
+      { 
+        error: 'Failed to delete product',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
   }
