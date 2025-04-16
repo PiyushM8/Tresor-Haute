@@ -116,7 +116,7 @@ export async function POST(req: Request) {
       });
 
       // Create shipping info
-      await tx.ShippingInfo.create({
+      await tx.shipping_info.create({
         data: {
           orderId: order.id,
           firstName: shippingInfo.firstName,
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
       });
 
       // Create payment info
-      await tx.PaymentInfo.create({
+      await tx.payment_info.create({
         data: {
           orderId: order.id,
           cardNumber: paymentInfo.cardNumber,
@@ -161,8 +161,8 @@ export async function POST(req: Request) {
             product: true
           }
         },
-        ShippingInfo: true,
-        PaymentInfo: true
+        shipping_info: true,
+        payment_info: true
       }
     });
 
