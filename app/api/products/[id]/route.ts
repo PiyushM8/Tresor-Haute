@@ -71,6 +71,7 @@ export async function DELETE(
       where: { id: params.id },
       include: {
         orderItems: true,
+        cartItems: true,
       },
     });
 
@@ -81,12 +82,16 @@ export async function DELETE(
       );
     }
 
-    // Check if the product is referenced in any orders
-    if (product.orderItems.length > 0) {
+    // Check if the product is referenced in any orders or carts
+    if (product.orderItems.length > 0 || product.cartItems.length > 0) {
+      const references = [];
+      if (product.orderItems.length > 0) references.push('orders');
+      if (product.cartItems.length > 0) references.push('shopping carts');
+      
       return NextResponse.json(
         { 
           error: 'Cannot delete product',
-          details: 'This product is referenced in existing orders. Please archive it instead.'
+          details: `This product is referenced in existing ${references.join(' and ')}. Please archive it instead.`
         },
         { status: 400 }
       );
@@ -109,7 +114,7 @@ export async function DELETE(
         return NextResponse.json(
           { 
             error: 'Cannot delete product',
-            details: 'This product is referenced in existing orders. Please archive it instead.'
+            details: 'This product is referenced in existing orders or shopping carts. Please archive it instead.'
           },
           { status: 400 }
         );
