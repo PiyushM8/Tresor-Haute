@@ -77,8 +77,7 @@ export async function POST(req: Request) {
       orderItems.push({
         product: { connect: { id: item.productId } },
         quantity: item.quantity,
-        price: product.price,
-        order: {} // This will be connected automatically by Prisma
+        price: product.price
       });
     }
 
@@ -103,9 +102,8 @@ export async function POST(req: Request) {
         userId,
         total,
         status: OrderStatus.PENDING,
-        isGuest: !session?.user,
         items: {
-          create: orderItems.map(({ order, ...item }) => item)
+          create: orderItems
         },
         shippingInfo: {
           create: {
@@ -129,9 +127,7 @@ export async function POST(req: Request) {
           include: {
             product: true
           }
-        },
-        shippingInfo: true,
-        paymentInfo: true
+        }
       }
     });
 
@@ -187,9 +183,7 @@ export async function GET(request: Request) {
               name: true,
               email: true,
             },
-          },
-          shippingInfo: true,
-          paymentInfo: true,
+          }
         },
         orderBy: {
           createdAt: 'desc',
@@ -204,9 +198,7 @@ export async function GET(request: Request) {
         userId: session.user.id,
       },
       include: {
-        items: true,
-        shippingInfo: true,
-        paymentInfo: true,
+        items: true
       },
       orderBy: {
         createdAt: 'desc',
