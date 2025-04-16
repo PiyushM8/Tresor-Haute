@@ -164,11 +164,7 @@ export async function POST(req: Request) {
       console.log('[ORDERS_POST] Creating order...');
       const order = await prisma.$transaction(async (tx) => {
         const orderData = {
-          user: {
-            connect: {
-              id: userId
-            }
-          },
+          userId,
           total,
           status: OrderStatus.PENDING,
           isGuest,
@@ -220,8 +216,6 @@ export async function POST(req: Request) {
           }
         });
 
-        console.log('[ORDERS_POST] Order created:', newOrder.id);
-
         // Update product stock
         for (const item of items) {
           await tx.product.update({
@@ -233,18 +227,17 @@ export async function POST(req: Request) {
             }
           });
         }
-        console.log('[ORDERS_POST] Product stock updated');
 
         return newOrder;
       });
 
-      console.log('[ORDERS_POST] Order creation successful');
+      console.log('[ORDERS_POST] Order created successfully');
       return NextResponse.json(order);
     } catch (error) {
-      console.error("[ORDERS_POST] Transaction error:", error);
+      console.error("[ORDERS_POST] Order creation error:", error);
       return NextResponse.json(
         { 
-          error: "Failed to process order",
+          error: "Failed to create order",
           details: error instanceof Error ? error.message : "Unknown error"
         },
         { status: 500 }
