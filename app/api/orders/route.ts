@@ -162,81 +162,102 @@ export async function POST(req: Request) {
     // Create the order in a transaction
     try {
       console.log('[ORDERS_POST] Creating order...');
-      const order = await prisma.$transaction(async (tx) => {
-        const orderData = {
-          user: {
-            connect: {
-              id: userId
-            }
-          },
-          total,
-          status: OrderStatus.PENDING,
-          isGuest,
-          items: {
-            createMany: {
-              data: orderItems
-            }
-          },
-          shippingInfo: {
-            create: {
-              firstName: shippingInfo.firstName,
-              lastName: shippingInfo.lastName,
-              email: shippingInfo.email,
-              address: shippingInfo.address,
-              city: shippingInfo.city,
-              postalCode: shippingInfo.postalCode
-            }
-          },
-          paymentInfo: {
-            create: {
-              cardNumber: maskCardNumber(paymentInfo.cardNumber),
-              expiryDate: paymentInfo.expiryDate
-            }
-          }
-        };
 
-        console.log('[ORDERS_POST] Order data prepared:', {
+      // Create order with items in a single operation
+      const order = await prisma.order.create({
+        data: {
           userId,
           total,
-          isGuest,
-          itemsCount: items.length
-        });
+          status: OrderStatus.PENDING,
+          items: {
+            createMany: {
+              data: orderItems.map(item => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price
+              }))
+            }
+          }
+        },
+        include: {
+          items: {
+            include: {
+              product: true
+            }
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true
+            }
+          }
+        }
+      });
 
-        const newOrder = await tx.order.create({
-          data: orderData,
-          include: {
-            items: {
-              include: {
-                product: true
-              }
-            },
-            user: {
-              select: {
-                id: true,
-                email: true,
-                name: true
-              }
+      // Create shipping info using raw SQL
+      await prisma.$executeRaw`
+        INSERT INTO shipping_info (
+          "orderId", "firstName", "lastName", "email", "address", "city", "postalCode", "createdAt", "updatedAt"
+        ) VALUES (
+          ${order.id},
+          ${shippingInfo.firstName},
+          ${shippingInfo.lastName},
+          ${shippingInfo.email},
+          ${shippingInfo.address},
+          ${shippingInfo.city},
+          ${shippingInfo.postalCode},
+          NOW(),
+          NOW()
+        )
+      `;
+
+      // Create payment info using raw SQL
+      await prisma.$executeRaw`
+        INSERT INTO payment_info (
+          "orderId", "cardNumber", "expiryDate", "createdAt", "updatedAt"
+        ) VALUES (
+          ${order.id},
+          ${maskCardNumber(paymentInfo.cardNumber)},
+          ${paymentInfo.expiryDate},
+          NOW(),
+          NOW()
+        )
+      `;
+
+      // Update product stock
+      for (const item of items) {
+        await prisma.product.update({
+          where: { id: item.productId },
+          data: {
+            stock: {
+              decrement: item.quantity
             }
           }
         });
+      }
 
-        // Update product stock
-        for (const item of items) {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                decrement: item.quantity
-              }
+      // Get the complete order with all relations
+      const completeOrder = await prisma.order.findUnique({
+        where: { id: order.id },
+        include: {
+          items: {
+            include: {
+              product: true
             }
-          });
+          },
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true
+            }
+          }
         }
-
-        return newOrder;
       });
 
       console.log('[ORDERS_POST] Order created successfully');
-      return NextResponse.json(order);
+      return NextResponse.json(completeOrder);
     } catch (error) {
       console.error("[ORDERS_POST] Order creation error:", error);
       return NextResponse.json(
