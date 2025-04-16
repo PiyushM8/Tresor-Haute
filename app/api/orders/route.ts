@@ -11,7 +11,7 @@ interface OrderItem {
   quantity: number;
 }
 
-interface ShippingInfoInput {
+interface ShippingInfo {
   firstName: string;
   lastName: string;
   email: string;
@@ -20,156 +20,138 @@ interface ShippingInfoInput {
   postalCode: string;
 }
 
-interface PaymentInfoInput {
+interface PaymentInfo {
   cardNumber: string;
   expiryDate: string;
 }
 
 interface OrderRequestBody {
   items: OrderItem[];
-  shippingInfo: ShippingInfoInput;
-  paymentInfo: PaymentInfoInput;
+  shippingInfo: ShippingInfo;
+  paymentInfo: PaymentInfo;
 }
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    const body = await req.json() as OrderRequestBody;
-    const { items, shippingInfo, paymentInfo } = body;
+    const body: OrderRequestBody = await req.json();
 
     // Validate required fields
-    if (!items?.length || !shippingInfo || !paymentInfo) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+    const { items, shippingInfo, paymentInfo } = body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return new NextResponse("Items are required", { status: 400 });
     }
 
-    // Calculate total and validate products
+    if (!shippingInfo) {
+      return new NextResponse("Shipping information is required", { status: 400 });
+    }
+
+    if (!paymentInfo) {
+      return new NextResponse("Payment information is required", { status: 400 });
+    }
+
+    // Calculate total and validate stock
     let total = 0;
-    const productIds = items.map(item => item.productId);
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds } },
-    });
+    const orderItems: Prisma.OrderItemCreateInput[] = [];
 
-    if (products.length !== items.length) {
-      return NextResponse.json(
-        { error: 'One or more products not found' },
-        { status: 400 }
-      );
-    }
-
-    // Check stock and calculate total
     for (const item of items) {
-      const product = products.find((p) => p.id === item.productId);
-      if (!product) continue;
-      
-      if (product.stock < item.quantity) {
-        return NextResponse.json(
-          { error: `Insufficient stock for product: ${product.name}` },
-          { status: 400 }
-        );
+      const product = await prisma.product.findUnique({
+        where: { id: item.productId },
+        select: {
+          id: true,
+          price: true,
+          stock: true
+        }
+      });
+
+      if (!product) {
+        return new NextResponse(`Product ${item.productId} not found`, { status: 404 });
       }
+
+      if (product.stock < item.quantity) {
+        return new NextResponse(`Insufficient stock for product ${item.productId}`, { status: 400 });
+      }
+
       total += product.price * item.quantity;
+      orderItems.push({
+        product: { connect: { id: item.productId } },
+        quantity: item.quantity,
+        price: product.price,
+        order: {} // This will be connected automatically by Prisma
+      });
     }
 
-    // Create or get user
-    let userId: string;
-    if (session?.user) {
-      userId = session.user.id;
-    } else {
-      // Create guest user with hashed password
-      const tempPassword = Math.random().toString(36).slice(-8);
-      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    let userId = session?.user?.id;
+
+    // Create guest user if no session
+    if (!userId) {
       const guestUser = await prisma.user.create({
         data: {
-          name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-          email: shippingInfo.email,
-          password: hashedPassword,
-          role: Role.USER,
-        },
+          email: `guest_${Date.now()}@example.com`,
+          name: "Guest User",
+          password: await bcrypt.hash(Math.random().toString(36), 10),
+          role: Role.USER
+        }
       });
       userId = guestUser.id;
     }
 
-    // Create order and related data in a transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // Create the order
-      const order = await tx.order.create({
-        data: {
-          user: { connect: { id: userId } },
-          total,
-          status: OrderStatus.PENDING,
-          items: {
-            create: items.map(item => ({
-              product: { connect: { id: item.productId } },
-              quantity: item.quantity,
-              price: products.find(p => p.id === item.productId)?.price || 0,
-            })),
-          },
+    // Create the order with nested creates for shipping and payment info
+    const order = await prisma.order.create({
+      data: {
+        userId,
+        total,
+        status: OrderStatus.PENDING,
+        isGuest: !session?.user,
+        items: {
+          create: orderItems.map(({ order, ...item }) => item)
         },
-      });
-
-      // Create shipping info
-      await tx.shippingInfo.create({
-        data: {
-          order: { connect: { id: order.id } },
-          firstName: shippingInfo.firstName,
-          lastName: shippingInfo.lastName,
-          email: shippingInfo.email,
-          address: shippingInfo.address,
-          city: shippingInfo.city,
-          postalCode: shippingInfo.postalCode,
+        shippingInfo: {
+          create: {
+            firstName: shippingInfo.firstName,
+            lastName: shippingInfo.lastName,
+            email: shippingInfo.email,
+            address: shippingInfo.address,
+            city: shippingInfo.city,
+            postalCode: shippingInfo.postalCode
+          }
         },
-      });
-
-      // Create payment info
-      await tx.paymentInfo.create({
-        data: {
-          order: { connect: { id: order.id } },
-          cardNumber: paymentInfo.cardNumber,
-          expiryDate: paymentInfo.expiryDate,
+        paymentInfo: {
+          create: {
+            cardNumber: paymentInfo.cardNumber,
+            expiryDate: paymentInfo.expiryDate
+          }
+        }
+      },
+      include: {
+        items: {
+          include: {
+            product: true
+          }
         },
-      });
-
-      // Update product stock
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            stock: {
-              decrement: item.quantity,
-            },
-          },
-        });
+        shippingInfo: true,
+        paymentInfo: true
       }
-
-      // Return the complete order
-      return tx.order.findUnique({
-        where: { id: order.id },
-        include: {
-          items: {
-            include: {
-              product: true,
-            },
-          },
-          shippingInfo: true,
-          paymentInfo: true,
-        },
-      });
     });
 
-    if (!result) {
-      throw new Error('Failed to create order');
+    // Update product stock
+    for (const item of items) {
+      await prisma.product.update({
+        where: { id: item.productId },
+        data: {
+          stock: {
+            decrement: item.quantity
+          }
+        }
+      });
     }
 
-    return NextResponse.json(result);
+    return NextResponse.json(order);
+
   } catch (error) {
-    console.error('Error creating order:', error);
-    return NextResponse.json(
-      { error: 'Failed to create order' },
-      { status: 500 }
-    );
+    console.error("[ORDERS_POST]", error);
+    return new NextResponse("Internal error", { status: 500 });
   }
 }
 
@@ -185,14 +167,10 @@ export async function GET(request: Request) {
     }
 
     // If user is admin, return all orders
-    if (session.user.role === 'ADMIN') {
+    if (session.user.role === Role.ADMIN) {
       const orders = await prisma.order.findMany({
         include: {
-          items: {
-            include: {
-              product: true,
-            },
-          },
+          items: true,
           user: {
             select: {
               id: true,
@@ -200,6 +178,8 @@ export async function GET(request: Request) {
               email: true,
             },
           },
+          shippingInfo: true,
+          paymentInfo: true,
         },
         orderBy: {
           createdAt: 'desc',
@@ -214,11 +194,9 @@ export async function GET(request: Request) {
         userId: session.user.id,
       },
       include: {
-        items: {
-          include: {
-            product: true,
-          },
-        },
+        items: true,
+        shippingInfo: true,
+        paymentInfo: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -228,7 +206,10 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error('Error fetching orders:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch orders' },
+      { 
+        error: 'Failed to fetch orders',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
   }
