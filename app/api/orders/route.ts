@@ -125,6 +125,13 @@ export async function POST(req: Request) {
     // Create the order in a transaction
     try {
       const order = await prisma.$transaction(async (tx) => {
+        console.log("[ORDERS_POST] Starting order creation with data:", {
+          userId,
+          total,
+          isGuest,
+          itemsCount: items.length
+        });
+
         const orderData = {
           user: {
             connect: {
@@ -157,6 +164,12 @@ export async function POST(req: Request) {
           }
         } as const;
 
+        console.log("[ORDERS_POST] Order data prepared:", {
+          ...orderData,
+          shippingInfo: { ...orderData.shippingInfo.create, email: '[REDACTED]' },
+          paymentInfo: { ...orderData.paymentInfo.create, cardNumber: '[REDACTED]' }
+        });
+
         const include = {
           items: {
             include: {
@@ -174,31 +187,49 @@ export async function POST(req: Request) {
           }
         } as const;
 
-        const newOrder = await tx.order.create({
-          data: orderData,
-          include
-        });
-
-        // Update product stock
-        for (const item of items) {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                decrement: item.quantity
-              }
-            }
+        try {
+          const newOrder = await tx.order.create({
+            data: orderData,
+            include
           });
-        }
+          console.log("[ORDERS_POST] Order created successfully:", newOrder.id);
 
-        return newOrder;
+          // Update product stock
+          for (const item of items) {
+            await tx.product.update({
+              where: { id: item.productId },
+              data: {
+                stock: {
+                  decrement: item.quantity
+                }
+              }
+            });
+          }
+          console.log("[ORDERS_POST] Product stock updated successfully");
+
+          return newOrder;
+        } catch (error) {
+          console.error("[ORDERS_POST] Error creating order:", {
+            error,
+            message: error instanceof Error ? error.message : 'Unknown error',
+            stack: error instanceof Error ? error.stack : undefined
+          });
+          throw error;
+        }
       });
 
       return NextResponse.json(order);
     } catch (error) {
-      console.error("[ORDERS_POST] Transaction error:", error);
+      console.error("[ORDERS_POST] Transaction error:", {
+        error,
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
       return new NextResponse(
-        "Failed to process order. Please try again.",
+        JSON.stringify({ 
+          error: "Failed to process order",
+          details: error instanceof Error ? error.message : 'Unknown error'
+        }), 
         { status: 500 }
       );
     }

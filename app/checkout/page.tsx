@@ -87,7 +87,6 @@ export default function CheckoutPage() {
         },
         body: JSON.stringify({
           items,
-          userId: session?.user?.id,
           shippingInfo: {
             firstName: formData.firstName,
             lastName: formData.lastName,
@@ -107,7 +106,8 @@ export default function CheckoutPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to create order');
+        const errorData = await response.json();
+        throw new Error(errorData.details || 'Failed to create order');
       }
 
       const order = await response.json();
@@ -115,7 +115,7 @@ export default function CheckoutPage() {
       router.push(`/orders/${order.id}`);
     } catch (err) {
       console.error('Error creating order:', err);
-      setError('Failed to create order. Please try again.');
+      setError(err instanceof Error ? err.message : 'Failed to create order. Please try again.');
     } finally {
       setLoading(false);
     }
