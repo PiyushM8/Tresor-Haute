@@ -23,7 +23,12 @@ export async function POST(req: Request) {
         cloudName: !!process.env.CLOUDINARY_CLOUD_NAME,
         apiKey: !!process.env.CLOUDINARY_API_KEY,
         apiSecret: !!process.env.CLOUDINARY_API_SECRET,
-        message: 'Cloudinary configuration missing'
+        message: 'Cloudinary configuration missing',
+        env: {
+          CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME ? 'present' : 'missing',
+          CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
+          CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
+        }
       };
       console.error('Cloudinary configuration error:', errorDetails);
       return NextResponse.json(
@@ -40,7 +45,10 @@ export async function POST(req: Request) {
     if (!session) {
       console.error('Unauthorized upload attempt');
       return NextResponse.json(
-        { error: 'Unauthorized' },
+        { 
+          error: 'Unauthorized',
+          details: { message: 'You must be logged in to upload images' }
+        },
         { status: 401 }
       );
     }
@@ -51,7 +59,10 @@ export async function POST(req: Request) {
     if (!file) {
       console.error('No file in upload request');
       return NextResponse.json(
-        { error: 'No file uploaded' },
+        { 
+          error: 'No file uploaded',
+          details: { message: 'Please select a file to upload' }
+        },
         { status: 400 }
       );
     }
@@ -70,7 +81,8 @@ export async function POST(req: Request) {
           details: {
             type: file.type,
             name: file.name,
-            size: file.size
+            size: file.size,
+            allowedTypes: validTypes
           }
         },
         { status: 400 }
@@ -85,7 +97,8 @@ export async function POST(req: Request) {
     console.log('Starting Cloudinary upload...', {
       fileName: file.name,
       fileType: file.type,
-      fileSize: file.size
+      fileSize: file.size,
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME
     });
     
     // Upload to Cloudinary
@@ -99,7 +112,8 @@ export async function POST(req: Request) {
             error,
             fileName: file.name,
             fileType: file.type,
-            fileSize: file.size
+            fileSize: file.size,
+            cloudName: process.env.CLOUDINARY_CLOUD_NAME
           });
           reject(error);
         } else {
@@ -120,7 +134,10 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { 
           error: 'Failed to get image URL from upload service',
-          details: { uploadResult }
+          details: { 
+            uploadResult,
+            message: 'Cloudinary upload succeeded but no URL was returned'
+          }
         },
         { status: 500 }
       );
@@ -131,14 +148,16 @@ export async function POST(req: Request) {
     console.error('Upload error:', {
       error,
       message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined
+      stack: error instanceof Error ? error.stack : undefined,
+      type: error instanceof Error ? error.constructor.name : typeof error
     });
     return NextResponse.json(
       { 
         error: 'Failed to upload image',
         details: {
           message: error instanceof Error ? error.message : 'Unknown error',
-          type: error instanceof Error ? error.constructor.name : typeof error
+          type: error instanceof Error ? error.constructor.name : typeof error,
+          stack: error instanceof Error ? error.stack : undefined
         }
       },
       { status: 500 }

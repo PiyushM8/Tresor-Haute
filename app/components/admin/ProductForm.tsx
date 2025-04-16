@@ -192,7 +192,11 @@ export default function ProductForm({ initialData }: ProductFormProps) {
             statusText: response.statusText,
             data: data
           });
-          throw new Error(data.error || `Failed to upload image: ${response.status} ${response.statusText}`);
+          throw new Error(
+            `Failed to upload image: ${response.status} ${response.statusText}\n` +
+            `Details: ${data.error || 'Unknown error'}\n` +
+            `Additional info: ${JSON.stringify(data.details || {}, null, 2)}`
+          );
         }
 
         if (!data.url) {
@@ -217,8 +221,9 @@ export default function ProductForm({ initialData }: ProductFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
-        <div className="bg-red-50 text-red-600 p-4 rounded-lg">
-          {error}
+        <div className="bg-red-50 text-red-600 p-4 rounded-lg whitespace-pre-wrap">
+          <p className="font-semibold">Error:</p>
+          <p>{error}</p>
         </div>
       )}
 
