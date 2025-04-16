@@ -126,8 +126,8 @@ model Order {
   isGuest      Boolean       @default(false)
   items        OrderItem[]
   user         User          @relation(fields: [userId], references: [id])
-  paymentInfo  PaymentInfo?
-  shippingInfo ShippingInfo?
+  shippingInfo ShippingInfo? @relation("OrderShippingInfo")
+  paymentInfo  PaymentInfo?  @relation("OrderPaymentInfo")
 
   @@index([userId])
   @@map("orders")
@@ -160,7 +160,7 @@ model ShippingInfo {
   postalCode String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order      Order    @relation("OrderShippingInfo", fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("shipping_info")
 }
@@ -172,7 +172,7 @@ model PaymentInfo {
   expiryDate String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order      Order    @relation("OrderPaymentInfo", fields: [orderId], references: [id], onDelete: Cascade)
 
   @@map("payment_info")
 }

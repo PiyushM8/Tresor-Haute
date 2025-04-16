@@ -43,131 +43,165 @@ export async function POST(req: Request) {
       return new NextResponse("Items are required", { status: 400 });
     }
 
-    if (!shippingInfo) {
-      return new NextResponse("Shipping information is required", { status: 400 });
+    if (!shippingInfo || !validateShippingInfo(shippingInfo)) {
+      return new NextResponse("Invalid shipping information", { status: 400 });
     }
 
-    if (!paymentInfo) {
-      return new NextResponse("Payment information is required", { status: 400 });
-    }
-
-    // Calculate total and validate stock
-    let total = 0;
-    const orderItems: Prisma.OrderItemCreateManyOrderInput[] = [];
-
-    for (const item of items) {
-      const product = await prisma.product.findUnique({
-        where: { id: item.productId },
-        select: {
-          id: true,
-          price: true,
-          stock: true
-        }
-      });
-
-      if (!product) {
-        return new NextResponse(`Product ${item.productId} not found`, { status: 404 });
-      }
-
-      if (product.stock < item.quantity) {
-        return new NextResponse(`Insufficient stock for product ${item.productId}`, { status: 400 });
-      }
-
-      total += product.price * item.quantity;
-      orderItems.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: product.price
-      });
+    if (!paymentInfo || !validatePaymentInfo(paymentInfo)) {
+      return new NextResponse("Invalid payment information", { status: 400 });
     }
 
     let userId = session?.user?.id;
+    let isGuest = false;
 
     // Create guest user if no session
     if (!userId) {
-      const guestUser = await prisma.user.create({
-        data: {
-          email: `guest_${Date.now()}@example.com`,
-          name: "Guest User",
-          password: await bcrypt.hash(Math.random().toString(36), 10),
-          role: Role.USER
+      try {
+        const guestEmail = `guest_${Date.now()}@tresor-haute.com`;
+        const existingUser = await prisma.user.findUnique({
+          where: { email: guestEmail }
+        });
+
+        if (existingUser) {
+          return new NextResponse("Failed to create guest user", { status: 500 });
+        }
+
+        const guestUser = await prisma.user.create({
+          data: {
+            email: guestEmail,
+            name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
+            password: await bcrypt.hash(Math.random().toString(36), 10),
+            role: Role.USER
+          }
+        });
+        userId = guestUser.id;
+        isGuest = true;
+      } catch (error) {
+        console.error("[ORDERS_POST] Guest user creation error:", error);
+        return new NextResponse("Failed to create guest user", { status: 500 });
+      }
+    }
+
+    // Calculate total and validate stock in a preliminary transaction
+    let orderItems: Prisma.OrderItemCreateManyOrderInput[] = [];
+    let total = 0;
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const item of items) {
+          const product = await tx.product.findUnique({
+            where: { id: item.productId },
+            select: {
+              id: true,
+              price: true,
+              stock: true
+            }
+          });
+
+          if (!product) {
+            throw new Error(`Product ${item.productId} not found`);
+          }
+
+          if (product.stock < item.quantity) {
+            throw new Error(`Insufficient stock for product ${item.productId}`);
+          }
+
+          total += product.price * item.quantity;
+          orderItems.push({
+            productId: item.productId,
+            quantity: item.quantity,
+            price: product.price
+          });
         }
       });
-      userId = guestUser.id;
+    } catch (error) {
+      console.error("[ORDERS_POST] Product validation error:", error);
+      return new NextResponse(
+        error instanceof Error ? error.message : "Failed to validate products",
+        { status: 400 }
+      );
     }
 
     // Create the order in a transaction
-    const order = await prisma.$transaction(async (tx) => {
-      // Create the order
-      const order = await tx.order.create({
-        data: {
-          userId,
+    try {
+      const order = await prisma.$transaction(async (tx) => {
+        const orderData = {
+          user: {
+            connect: {
+              id: userId
+            }
+          },
           total,
-          status: OrderStatus.PENDING
-        }
-      });
-
-      // Create order items
-      await tx.orderItem.createMany({
-        data: orderItems.map(item => ({
-          ...item,
-          orderId: order.id
-        }))
-      });
-
-      // Create shipping info
-      await tx.shippingInfo.create({
-        data: {
-          orderId: order.id,
-          firstName: shippingInfo.firstName,
-          lastName: shippingInfo.lastName,
-          email: shippingInfo.email,
-          address: shippingInfo.address,
-          city: shippingInfo.city,
-          postalCode: shippingInfo.postalCode
-        }
-      });
-
-      // Create payment info
-      await tx.paymentInfo.create({
-        data: {
-          orderId: order.id,
-          cardNumber: paymentInfo.cardNumber,
-          expiryDate: paymentInfo.expiryDate
-        }
-      });
-
-      // Update product stock
-      for (const item of items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            stock: {
-              decrement: item.quantity
+          status: OrderStatus.PENDING,
+          isGuest,
+          items: {
+            createMany: {
+              data: orderItems
+            }
+          },
+          shippingInfo: {
+            create: {
+              firstName: shippingInfo.firstName,
+              lastName: shippingInfo.lastName,
+              email: shippingInfo.email,
+              address: shippingInfo.address,
+              city: shippingInfo.city,
+              postalCode: shippingInfo.postalCode
+            }
+          },
+          paymentInfo: {
+            create: {
+              cardNumber: maskCardNumber(paymentInfo.cardNumber),
+              expiryDate: paymentInfo.expiryDate
             }
           }
-        });
-      }
+        } as const;
 
-      return order;
-    });
-
-    // Fetch the complete order with all relations
-    const completeOrder = await prisma.order.findUnique({
-      where: { id: order.id },
-      include: {
-        items: {
-          include: {
-            product: true
+        const include = {
+          items: {
+            include: {
+              product: true
+            }
+          },
+          shippingInfo: true,
+          paymentInfo: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true
+            }
           }
-        },
-        shippingInfo: true,
-        paymentInfo: true
-      }
-    });
+        } as const;
 
-    return NextResponse.json(completeOrder);
+        const newOrder = await tx.order.create({
+          data: orderData,
+          include
+        });
 
+        // Update product stock
+        for (const item of items) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              stock: {
+                decrement: item.quantity
+              }
+            }
+          });
+        }
+
+        return newOrder;
+      });
+
+      return NextResponse.json(order);
+    } catch (error) {
+      console.error("[ORDERS_POST] Transaction error:", error);
+      return new NextResponse(
+        "Failed to process order. Please try again.",
+        { status: 500 }
+      );
+    }
   } catch (error) {
     console.error("[ORDERS_POST] Error details:", {
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -182,6 +216,33 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+// Validation helpers
+function validateShippingInfo(info: ShippingInfo): boolean {
+  return !!(
+    info.firstName?.trim() &&
+    info.lastName?.trim() &&
+    info.email?.trim() &&
+    info.email.includes('@') &&
+    info.address?.trim() &&
+    info.city?.trim() &&
+    info.postalCode?.trim()
+  );
+}
+
+function validatePaymentInfo(info: PaymentInfo): boolean {
+  return !!(
+    info.cardNumber?.trim() &&
+    info.cardNumber.replace(/\s/g, '').length >= 15 &&
+    info.expiryDate?.trim() &&
+    /^\d{2}\/\d{2}$/.test(info.expiryDate)
+  );
+}
+
+function maskCardNumber(cardNumber: string): string {
+  const cleaned = cardNumber.replace(/\s/g, '');
+  return `****${cleaned.slice(-4)}`;
 }
 
 export async function GET(request: Request) {
