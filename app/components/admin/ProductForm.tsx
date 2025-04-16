@@ -172,19 +172,33 @@ export default function ProductForm({ initialData }: ProductFormProps) {
         const formData = new FormData();
         formData.append('file', file);
 
+        console.log('Uploading file:', {
+          name: file.name,
+          type: file.type,
+          size: file.size
+        });
+
         const response = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });
 
+        const data = await response.json();
+
         if (!response.ok) {
-          throw new Error('Failed to upload image');
+          console.error('Upload failed:', data);
+          throw new Error(data.error || 'Failed to upload image');
         }
 
-        const data = await response.json();
+        if (!data.url) {
+          console.error('No URL in response:', data);
+          throw new Error('No image URL returned from server');
+        }
+
         setImages(prev => [...prev, data.url]);
       }
     } catch (error) {
+      console.error('Image upload error:', error);
       setError(error instanceof Error ? error.message : 'Failed to upload images');
     } finally {
       setUploading(false);

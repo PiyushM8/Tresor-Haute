@@ -16,16 +16,25 @@ interface CloudinaryUploadResult {
 }
 
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
-
-  if (!session || session.user.role !== 'ADMIN') {
-    return NextResponse.json(
-      { error: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-
   try {
+    const session = await getServerSession(authOptions);
+
+    if (!session) {
+      console.error('No session found');
+      return NextResponse.json(
+        { error: 'Unauthorized - No session' },
+        { status: 401 }
+      );
+    }
+
+    if (session.user.role !== 'ADMIN') {
+      console.error('User is not admin:', session.user);
+      return NextResponse.json(
+        { error: 'Unauthorized - Not an admin' },
+        { status: 401 }
+      );
+    }
+
     // Check if Cloudinary is configured
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
       console.error('Cloudinary configuration missing:', {
@@ -43,6 +52,7 @@ export async function POST(request: Request) {
     const file = formData.get('file') as File;
 
     if (!file) {
+      console.error('No file in form data');
       return NextResponse.json(
         { error: 'No file uploaded' },
         { status: 400 }
@@ -52,6 +62,7 @@ export async function POST(request: Request) {
     // Validate file type
     const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
     if (!allowedTypes.includes(file.type)) {
+      console.error('Invalid file type:', file.type);
       return NextResponse.json(
         { error: 'Invalid file type. Only JPEG, JPG, and PNG files are allowed.' },
         { status: 400 }
@@ -62,7 +73,11 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
-    console.log('Starting Cloudinary upload...');
+    console.log('Starting Cloudinary upload for file:', {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    });
     
     // Upload to Cloudinary
     const result = await new Promise<CloudinaryUploadResult>((resolve, reject) => {
@@ -94,9 +109,13 @@ export async function POST(request: Request) {
       success: true 
     });
   } catch (error) {
-    console.error('Error uploading file:', error);
+    console.error('Error in upload route:', error);
     return NextResponse.json(
-      { error: 'Failed to upload file', details: error instanceof Error ? error.message : 'Unknown error' },
+      { 
+        error: 'Failed to upload file', 
+        details: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      },
       { status: 500 }
     );
   }
