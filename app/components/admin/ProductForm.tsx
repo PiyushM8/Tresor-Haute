@@ -169,38 +169,27 @@ export default function ProductForm({ initialData }: ProductFormProps) {
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        
+        // Validate file size (max 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+          throw new Error(`File ${file.name} is too large. Maximum size is 10MB.`);
+        }
+
         const formData = new FormData();
         formData.append('file', file);
-
-        console.log('Uploading file:', {
-          name: file.name,
-          type: file.type,
-          size: file.size,
-          lastModified: file.lastModified
-        });
 
         const response = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });
 
-        const data = await response.json();
-
         if (!response.ok) {
-          console.error('Upload failed:', {
-            status: response.status,
-            statusText: response.statusText,
-            data: data
-          });
-          throw new Error(
-            `Failed to upload image: ${response.status} ${response.statusText}\n` +
-            `Details: ${data.error || 'Unknown error'}\n` +
-            `Additional info: ${JSON.stringify(data.details || {}, null, 2)}`
-          );
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Failed to upload image');
         }
 
+        const data = await response.json();
         if (!data.url) {
-          console.error('No URL in response:', data);
           throw new Error('No image URL returned from server');
         }
 

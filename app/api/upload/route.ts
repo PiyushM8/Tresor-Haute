@@ -10,6 +10,15 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// Test Cloudinary configuration
+cloudinary.api.ping()
+  .then(result => {
+    console.log('Cloudinary configuration test successful:', result);
+  })
+  .catch(error => {
+    console.error('Cloudinary configuration test failed:', error);
+  });
+
 interface CloudinaryUploadResult {
   secure_url: string;
   [key: string]: any;
@@ -19,23 +28,13 @@ export async function POST(req: Request) {
   try {
     // Check if Cloudinary is properly configured
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-      const errorDetails = {
+      console.error('Cloudinary configuration missing:', {
         cloudName: !!process.env.CLOUDINARY_CLOUD_NAME,
         apiKey: !!process.env.CLOUDINARY_API_KEY,
-        apiSecret: !!process.env.CLOUDINARY_API_SECRET,
-        message: 'Cloudinary configuration missing',
-        env: {
-          CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME ? 'present' : 'missing',
-          CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY ? 'present' : 'missing',
-          CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? 'present' : 'missing'
-        }
-      };
-      console.error('Cloudinary configuration error:', errorDetails);
+        apiSecret: !!process.env.CLOUDINARY_API_SECRET
+      });
       return NextResponse.json(
-        { 
-          error: 'Image upload service is not properly configured',
-          details: errorDetails
-        },
+        { error: 'Image upload service is not properly configured' },
         { status: 500 }
       );
     }
@@ -43,12 +42,8 @@ export async function POST(req: Request) {
     // Check authentication
     const session = await getServerSession(authOptions);
     if (!session) {
-      console.error('Unauthorized upload attempt');
       return NextResponse.json(
-        { 
-          error: 'Unauthorized',
-          details: { message: 'You must be logged in to upload images' }
-        },
+        { error: 'Unauthorized' },
         { status: 401 }
       );
     }
@@ -57,12 +52,8 @@ export async function POST(req: Request) {
     const file = formData.get('file') as File;
 
     if (!file) {
-      console.error('No file in upload request');
       return NextResponse.json(
-        { 
-          error: 'No file uploaded',
-          details: { message: 'Please select a file to upload' }
-        },
+        { error: 'No file uploaded' },
         { status: 400 }
       );
     }
@@ -70,21 +61,8 @@ export async function POST(req: Request) {
     // Validate file type
     const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!validTypes.includes(file.type)) {
-      console.error('Invalid file type:', {
-        type: file.type,
-        name: file.name,
-        size: file.size
-      });
       return NextResponse.json(
-        { 
-          error: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.',
-          details: {
-            type: file.type,
-            name: file.name,
-            size: file.size,
-            allowedTypes: validTypes
-          }
-        },
+        { error: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.' },
         { status: 400 }
       );
     }
@@ -94,72 +72,34 @@ export async function POST(req: Request) {
     const base64String = Buffer.from(buffer).toString('base64');
     const dataUri = `data:${file.type};base64,${base64String}`;
 
-    console.log('Starting Cloudinary upload...', {
-      fileName: file.name,
-      fileType: file.type,
-      fileSize: file.size,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME
-    });
-    
     // Upload to Cloudinary
     const uploadResult = await new Promise<CloudinaryUploadResult>((resolve, reject) => {
       cloudinary.uploader.upload(dataUri, {
         folder: 'tresor-haute',
         resource_type: 'auto',
+        timeout: 60000, // Increase timeout to 60 seconds
       }, (error, result) => {
         if (error) {
-          console.error('Cloudinary upload error:', {
-            error,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            cloudName: process.env.CLOUDINARY_CLOUD_NAME
-          });
+          console.error('Cloudinary upload error:', error);
           reject(error);
         } else {
-          console.log('Cloudinary upload successful:', {
-            result,
-            fileName: file.name
-          });
           resolve(result as CloudinaryUploadResult);
         }
       });
     });
 
     if (!uploadResult?.secure_url) {
-      console.error('No secure_url in upload result:', {
-        uploadResult,
-        fileName: file.name
-      });
       return NextResponse.json(
-        { 
-          error: 'Failed to get image URL from upload service',
-          details: { 
-            uploadResult,
-            message: 'Cloudinary upload succeeded but no URL was returned'
-          }
-        },
+        { error: 'Failed to get image URL from upload service' },
         { status: 500 }
       );
     }
 
     return NextResponse.json({ url: uploadResult.secure_url });
   } catch (error) {
-    console.error('Upload error:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      type: error instanceof Error ? error.constructor.name : typeof error
-    });
+    console.error('Upload error:', error);
     return NextResponse.json(
-      { 
-        error: 'Failed to upload image',
-        details: {
-          message: error instanceof Error ? error.message : 'Unknown error',
-          type: error instanceof Error ? error.constructor.name : typeof error,
-          stack: error instanceof Error ? error.stack : undefined
-        }
-      },
+      { error: 'Failed to upload image' },
       { status: 500 }
     );
   }
