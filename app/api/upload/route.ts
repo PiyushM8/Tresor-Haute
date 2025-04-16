@@ -26,6 +26,19 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Check if Cloudinary is configured
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      console.error('Cloudinary configuration missing:', {
+        cloud_name: !!process.env.CLOUDINARY_CLOUD_NAME,
+        api_key: !!process.env.CLOUDINARY_API_KEY,
+        api_secret: !!process.env.CLOUDINARY_API_SECRET,
+      });
+      return NextResponse.json(
+        { error: 'Cloudinary configuration is missing' },
+        { status: 500 }
+      );
+    }
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
 
@@ -49,6 +62,8 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
 
+    console.log('Starting Cloudinary upload...');
+    
     // Upload to Cloudinary
     const result = await new Promise<CloudinaryUploadResult>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
@@ -57,7 +72,11 @@ export async function POST(request: Request) {
           resource_type: 'auto',
         },
         (error, result) => {
-          if (error) reject(error);
+          if (error) {
+            console.error('Cloudinary upload error:', error);
+            reject(error);
+          }
+          console.log('Cloudinary upload result:', result);
           resolve(result as CloudinaryUploadResult);
         }
       );
@@ -66,6 +85,7 @@ export async function POST(request: Request) {
     });
 
     if (!result?.secure_url) {
+      console.error('No secure_url in Cloudinary result:', result);
       throw new Error('Failed to upload to Cloudinary');
     }
 
@@ -76,7 +96,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error('Error uploading file:', error);
     return NextResponse.json(
-      { error: 'Failed to upload file' },
+      { error: 'Failed to upload file', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
