@@ -96,56 +96,77 @@ export async function POST(req: Request) {
       userId = guestUser.id;
     }
 
-    // Create the order with nested creates for shipping and payment info
-    const order = await prisma.order.create({
-      data: {
-        userId,
-        total,
-        status: OrderStatus.PENDING,
-        items: {
-          createMany: {
-            data: orderItems
-          }
-        },
-        shippingInfo: {
-          create: {
-            firstName: shippingInfo.firstName,
-            lastName: shippingInfo.lastName,
-            email: shippingInfo.email,
-            address: shippingInfo.address,
-            city: shippingInfo.city,
-            postalCode: shippingInfo.postalCode
-          }
-        },
-        paymentInfo: {
-          create: {
-            cardNumber: paymentInfo.cardNumber,
-            expiryDate: paymentInfo.expiryDate
-          }
+    // Create the order in a transaction
+    const order = await prisma.$transaction(async (tx) => {
+      // Create the order
+      const order = await tx.order.create({
+        data: {
+          userId,
+          total,
+          status: OrderStatus.PENDING
         }
-      },
+      });
+
+      // Create order items
+      await tx.orderItem.createMany({
+        data: orderItems.map(item => ({
+          ...item,
+          orderId: order.id
+        }))
+      });
+
+      // Create shipping info
+      await tx.ShippingInfo.create({
+        data: {
+          orderId: order.id,
+          firstName: shippingInfo.firstName,
+          lastName: shippingInfo.lastName,
+          email: shippingInfo.email,
+          address: shippingInfo.address,
+          city: shippingInfo.city,
+          postalCode: shippingInfo.postalCode
+        }
+      });
+
+      // Create payment info
+      await tx.PaymentInfo.create({
+        data: {
+          orderId: order.id,
+          cardNumber: paymentInfo.cardNumber,
+          expiryDate: paymentInfo.expiryDate
+        }
+      });
+
+      // Update product stock
+      for (const item of items) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            stock: {
+              decrement: item.quantity
+            }
+          }
+        });
+      }
+
+      return order;
+    });
+
+    // Fetch the complete order with all relations
+    const completeOrder = await prisma.order.findUnique({
+      where: { id: order.id },
       include: {
         items: {
           include: {
             product: true
           }
-        }
+        },
+        ShippingInfo: true,
+        PaymentInfo: true
       }
     });
 
-    // Update product stock
-    for (const item of items) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: {
-          stock: {
-            decrement: item.quantity
-          }
-        }
-      });
-    }
-
-    return NextResponse.json(order);
+    return NextResponse.json(completeOrder);
 
   } catch (error) {
     console.error("[ORDERS_POST] Error details:", {
