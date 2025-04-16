@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
+import { v2 as cloudinary } from 'cloudinary';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/app/api/auth/auth-options';
-import { v2 as cloudinary } from 'cloudinary';
 
 // Configure Cloudinary
 cloudinary.config({
@@ -15,44 +15,34 @@ interface CloudinaryUploadResult {
   [key: string]: any;
 }
 
-export async function POST(request: Request) {
+export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-
-    if (!session) {
-      console.error('No session found');
-      return NextResponse.json(
-        { error: 'Unauthorized - No session' },
-        { status: 401 }
-      );
-    }
-
-    if (session.user.role !== 'ADMIN') {
-      console.error('User is not admin:', session.user);
-      return NextResponse.json(
-        { error: 'Unauthorized - Not an admin' },
-        { status: 401 }
-      );
-    }
-
-    // Check if Cloudinary is configured
+    // Check if Cloudinary is properly configured
     if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
       console.error('Cloudinary configuration missing:', {
-        cloud_name: !!process.env.CLOUDINARY_CLOUD_NAME,
-        api_key: !!process.env.CLOUDINARY_API_KEY,
-        api_secret: !!process.env.CLOUDINARY_API_SECRET,
+        cloudName: !!process.env.CLOUDINARY_CLOUD_NAME,
+        apiKey: !!process.env.CLOUDINARY_API_KEY,
+        apiSecret: !!process.env.CLOUDINARY_API_SECRET
       });
       return NextResponse.json(
-        { error: 'Cloudinary configuration is missing' },
+        { error: 'Image upload service is not properly configured' },
         { status: 500 }
       );
     }
 
-    const formData = await request.formData();
+    // Check authentication
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const formData = await req.formData();
     const file = formData.get('file') as File;
 
     if (!file) {
-      console.error('No file in form data');
       return NextResponse.json(
         { error: 'No file uploaded' },
         { status: 400 }
@@ -60,61 +50,52 @@ export async function POST(request: Request) {
     }
 
     // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-    if (!allowedTypes.includes(file.type)) {
-      console.error('Invalid file type:', file.type);
+    const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!validTypes.includes(file.type)) {
       return NextResponse.json(
-        { error: 'Invalid file type. Only JPEG, JPG, and PNG files are allowed.' },
+        { error: 'Invalid file type. Only JPEG, PNG, and WebP are allowed.' },
         { status: 400 }
       );
     }
 
     // Convert file to buffer
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    const buffer = await file.arrayBuffer();
+    const base64String = Buffer.from(buffer).toString('base64');
+    const dataUri = `data:${file.type};base64,${base64String}`;
 
-    console.log('Starting Cloudinary upload for file:', {
-      name: file.name,
-      type: file.type,
-      size: file.size
-    });
+    console.log('Starting Cloudinary upload...');
     
     // Upload to Cloudinary
-    const result = await new Promise<CloudinaryUploadResult>((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        {
-          folder: 'tresor-haute/products',
-          resource_type: 'auto',
-        },
-        (error, result) => {
-          if (error) {
-            console.error('Cloudinary upload error:', error);
-            reject(error);
-          }
-          console.log('Cloudinary upload result:', result);
+    const uploadResult = await new Promise<CloudinaryUploadResult>((resolve, reject) => {
+      cloudinary.uploader.upload(dataUri, {
+        folder: 'tresor-haute',
+        resource_type: 'auto',
+      }, (error, result) => {
+        if (error) {
+          console.error('Cloudinary upload error:', error);
+          reject(error);
+        } else {
+          console.log('Cloudinary upload successful:', result);
           resolve(result as CloudinaryUploadResult);
         }
-      );
-
-      uploadStream.end(buffer);
+      });
     });
 
-    if (!result?.secure_url) {
-      console.error('No secure_url in Cloudinary result:', result);
-      throw new Error('Failed to upload to Cloudinary');
+    if (!uploadResult?.secure_url) {
+      console.error('No secure_url in upload result:', uploadResult);
+      return NextResponse.json(
+        { error: 'Failed to get image URL from upload service' },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ 
-      url: result.secure_url,
-      success: true 
-    });
+    return NextResponse.json({ url: uploadResult.secure_url });
   } catch (error) {
-    console.error('Error in upload route:', error);
+    console.error('Upload error:', error);
     return NextResponse.json(
       { 
-        error: 'Failed to upload file', 
-        details: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
+        error: 'Failed to upload image',
+        details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     );
