@@ -114,13 +114,15 @@ export async function POST(req: Request) {
       }
     }
 
-    // Calculate total and validate stock in a preliminary transaction
-    let orderItems: Prisma.OrderItemCreateManyOrderInput[] = [];
-    let total = 0;
-
+    // Create the order in a single transaction
     try {
-      console.log('[ORDERS_POST] Validating products and stock...');
-      await prisma.$transaction(async (tx) => {
+      console.log('[ORDERS_POST] Creating order...');
+      
+      const order = await prisma.$transaction(async (tx) => {
+        // Calculate total and validate stock
+        let total = 0;
+
+        // Validate products and calculate total
         for (const item of items) {
           const product = await tx.product.findUnique({
             where: { id: item.productId },
@@ -140,124 +142,132 @@ export async function POST(req: Request) {
           }
 
           total += product.price * item.quantity;
-          orderItems.push({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: product.price
+
+          // Update stock
+          await tx.$executeRaw`
+            UPDATE "Product"
+            SET stock = stock - ${item.quantity}
+            WHERE id = ${item.productId} AND stock >= ${item.quantity}
+          `;
+        }
+
+        // Create order
+        const [newOrder] = await tx.$queryRaw<[{ id: string }]>`
+          INSERT INTO orders (id, "userId", total, status, "isGuest", "createdAt", "updatedAt")
+          VALUES (
+            gen_random_uuid(),
+            ${userId},
+            ${total},
+            'PENDING',
+            ${isGuest},
+            NOW(),
+            NOW()
+          )
+          RETURNING id
+        `;
+
+        // Create order items
+        for (const item of items) {
+          const product = await tx.product.findUnique({
+            where: { id: item.productId },
+            select: { price: true }
           });
+
+          if (!product) continue;
+
+          await tx.$executeRaw`
+            INSERT INTO order_items (id, "orderId", "productId", quantity, price, "createdAt", "updatedAt")
+            VALUES (
+              gen_random_uuid(),
+              ${newOrder.id},
+              ${item.productId},
+              ${item.quantity},
+              ${product.price},
+              NOW(),
+              NOW()
+            )
+          `;
         }
-      });
-      console.log('[ORDERS_POST] Products validated, total:', total);
-    } catch (error) {
-      console.error("[ORDERS_POST] Product validation error:", error);
-      return NextResponse.json(
-        { 
-          error: "Failed to validate products",
-          details: error instanceof Error ? error.message : "Unknown error"
-        },
-        { status: 400 }
-      );
-    }
 
-    // Create the order in a transaction
-    try {
-      console.log('[ORDERS_POST] Creating order...');
+        // Create shipping info
+        await tx.$executeRaw`
+          INSERT INTO shipping_info (id, "orderId", "firstName", "lastName", email, address, city, "postalCode", "createdAt", "updatedAt")
+          VALUES (
+            gen_random_uuid(),
+            ${newOrder.id},
+            ${shippingInfo.firstName},
+            ${shippingInfo.lastName},
+            ${shippingInfo.email},
+            ${shippingInfo.address},
+            ${shippingInfo.city},
+            ${shippingInfo.postalCode},
+            NOW(),
+            NOW()
+          )
+        `;
 
-      // Create order with items in a single operation
-      const order = await prisma.order.create({
-        data: {
-          userId,
-          total,
-          status: OrderStatus.PENDING,
-          items: {
-            createMany: {
-              data: orderItems.map(item => ({
-                productId: item.productId,
-                quantity: item.quantity,
-                price: item.price
-              }))
-            }
-          }
-        },
-        include: {
-          items: {
-            include: {
-              product: true
-            }
-          },
-          user: {
-            select: {
-              id: true,
-              email: true,
-              name: true
-            }
-          }
-        }
-      });
+        // Create payment info
+        await tx.$executeRaw`
+          INSERT INTO payment_info (id, "orderId", "cardNumber", "expiryDate", "createdAt", "updatedAt")
+          VALUES (
+            gen_random_uuid(),
+            ${newOrder.id},
+            ${maskCardNumber(paymentInfo.cardNumber)},
+            ${paymentInfo.expiryDate},
+            NOW(),
+            NOW()
+          )
+        `;
 
-      // Create shipping info using raw SQL
-      await prisma.$executeRaw`
-        INSERT INTO shipping_info (
-          "orderId", "firstName", "lastName", "email", "address", "city", "postalCode", "createdAt", "updatedAt"
-        ) VALUES (
-          ${order.id},
-          ${shippingInfo.firstName},
-          ${shippingInfo.lastName},
-          ${shippingInfo.email},
-          ${shippingInfo.address},
-          ${shippingInfo.city},
-          ${shippingInfo.postalCode},
-          NOW(),
-          NOW()
-        )
-      `;
+        // Get complete order
+        const [completeOrder] = await tx.$queryRaw<[any]>`
+          SELECT 
+            o.*,
+            json_build_object(
+              'id', u.id,
+              'email', u.email,
+              'name', u.name
+            ) as user,
+            json_agg(
+              json_build_object(
+                'id', oi.id,
+                'quantity', oi.quantity,
+                'price', oi.price,
+                'product', json_build_object(
+                  'id', p.id,
+                  'name', p.name,
+                  'price', p.price,
+                  'images', p.images
+                )
+              )
+            ) as items,
+            json_build_object(
+              'firstName', si."firstName",
+              'lastName', si."lastName",
+              'email', si.email,
+              'address', si.address,
+              'city', si.city,
+              'postalCode', si."postalCode"
+            ) as "shippingInfo",
+            json_build_object(
+              'cardNumber', pi."cardNumber",
+              'expiryDate', pi."expiryDate"
+            ) as "paymentInfo"
+          FROM orders o
+          LEFT JOIN "User" u ON o."userId" = u.id
+          LEFT JOIN order_items oi ON o.id = oi."orderId"
+          LEFT JOIN "Product" p ON oi."productId" = p.id
+          LEFT JOIN shipping_info si ON o.id = si."orderId"
+          LEFT JOIN payment_info pi ON o.id = pi."orderId"
+          WHERE o.id = ${newOrder.id}
+          GROUP BY o.id, u.id, si.id, pi.id
+        `;
 
-      // Create payment info using raw SQL
-      await prisma.$executeRaw`
-        INSERT INTO payment_info (
-          "orderId", "cardNumber", "expiryDate", "createdAt", "updatedAt"
-        ) VALUES (
-          ${order.id},
-          ${maskCardNumber(paymentInfo.cardNumber)},
-          ${paymentInfo.expiryDate},
-          NOW(),
-          NOW()
-        )
-      `;
-
-      // Update product stock
-      for (const item of items) {
-        await prisma.product.update({
-          where: { id: item.productId },
-          data: {
-            stock: {
-              decrement: item.quantity
-            }
-          }
-        });
-      }
-
-      // Get the complete order with all relations
-      const completeOrder = await prisma.order.findUnique({
-        where: { id: order.id },
-        include: {
-          items: {
-            include: {
-              product: true
-            }
-          },
-          user: {
-            select: {
-              id: true,
-              email: true,
-              name: true
-            }
-          }
-        }
+        return completeOrder;
       });
 
-      console.log('[ORDERS_POST] Order created successfully');
-      return NextResponse.json(completeOrder);
+      console.log('[ORDERS_POST] Order created successfully:', order.id);
+      return NextResponse.json(order);
     } catch (error) {
       console.error("[ORDERS_POST] Order creation error:", error);
       return NextResponse.json(
