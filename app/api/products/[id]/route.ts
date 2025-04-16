@@ -82,19 +82,24 @@ export async function DELETE(
       );
     }
 
-    // Check if the product is referenced in any orders or carts
-    if (product.orderItems.length > 0 || product.cartItems.length > 0) {
-      const references = [];
-      if (product.orderItems.length > 0) references.push('orders');
-      if (product.cartItems.length > 0) references.push('shopping carts');
-      
+    // Check if the product is referenced in any orders
+    if (product.orderItems.length > 0) {
       return NextResponse.json(
         { 
           error: 'Cannot delete product',
-          details: `This product is referenced in existing ${references.join(' and ')}. Please archive it instead.`
+          details: 'This product is referenced in existing orders. Please archive it instead.'
         },
         { status: 400 }
       );
+    }
+
+    // If product is in shopping carts, remove it from all carts
+    if (product.cartItems.length > 0) {
+      await prisma.cartItem.deleteMany({
+        where: {
+          productId: params.id,
+        },
+      });
     }
 
     // Delete the product
@@ -104,7 +109,12 @@ export async function DELETE(
       },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ 
+      success: true,
+      message: product.cartItems.length > 0 
+        ? 'Product deleted and removed from shopping carts' 
+        : 'Product deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting product:', error);
     
@@ -114,7 +124,7 @@ export async function DELETE(
         return NextResponse.json(
           { 
             error: 'Cannot delete product',
-            details: 'This product is referenced in existing orders or shopping carts. Please archive it instead.'
+            details: 'This product is referenced in existing orders. Please archive it instead.'
           },
           { status: 400 }
         );
