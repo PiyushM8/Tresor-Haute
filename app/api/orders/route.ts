@@ -40,15 +40,24 @@ export async function POST(req: Request) {
     const { items, shippingInfo, paymentInfo } = body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return new NextResponse("Items are required", { status: 400 });
+      return NextResponse.json(
+        { error: "Items are required" },
+        { status: 400 }
+      );
     }
 
     if (!shippingInfo || !validateShippingInfo(shippingInfo)) {
-      return new NextResponse("Invalid shipping information", { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid shipping information" },
+        { status: 400 }
+      );
     }
 
     if (!paymentInfo || !validatePaymentInfo(paymentInfo)) {
-      return new NextResponse("Invalid payment information", { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid payment information" },
+        { status: 400 }
+      );
     }
 
     let userId = session?.user?.id;
@@ -63,7 +72,10 @@ export async function POST(req: Request) {
         });
 
         if (existingUser) {
-          return new NextResponse("Failed to create guest user", { status: 500 });
+          return NextResponse.json(
+            { error: "Failed to create guest user" },
+            { status: 500 }
+          );
         }
 
         const guestUser = await prisma.user.create({
@@ -78,7 +90,10 @@ export async function POST(req: Request) {
         isGuest = true;
       } catch (error) {
         console.error("[ORDERS_POST] Guest user creation error:", error);
-        return new NextResponse("Failed to create guest user", { status: 500 });
+        return NextResponse.json(
+          { error: "Failed to create guest user" },
+          { status: 500 }
+        );
       }
     }
 
@@ -116,8 +131,11 @@ export async function POST(req: Request) {
       });
     } catch (error) {
       console.error("[ORDERS_POST] Product validation error:", error);
-      return new NextResponse(
-        error instanceof Error ? error.message : "Failed to validate products",
+      return NextResponse.json(
+        { 
+          error: "Failed to validate products",
+          details: error instanceof Error ? error.message : "Unknown error"
+        },
         { status: 400 }
       );
     }
@@ -225,11 +243,11 @@ export async function POST(req: Request) {
         message: error instanceof Error ? error.message : 'Unknown error',
         stack: error instanceof Error ? error.stack : undefined
       });
-      return new NextResponse(
-        JSON.stringify({ 
+      return NextResponse.json(
+        { 
           error: "Failed to process order",
           details: error instanceof Error ? error.message : 'Unknown error'
-        }), 
+        },
         { status: 500 }
       );
     }
@@ -239,11 +257,11 @@ export async function POST(req: Request) {
       stack: error instanceof Error ? error.stack : undefined,
       error: error
     });
-    return new NextResponse(
-      JSON.stringify({ 
+    return NextResponse.json(
+      { 
         error: "Internal error",
         details: error instanceof Error ? error.message : 'Unknown error'
-      }), 
+      },
       { status: 500 }
     );
   }
