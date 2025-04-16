@@ -52,6 +52,17 @@ export async function POST(req: Request) {
       );
     }
 
+    // Validate product IDs
+    for (const item of items) {
+      if (!item.productId || typeof item.productId !== 'string') {
+        console.log('[ORDERS_POST] Invalid product ID:', item.productId);
+        return NextResponse.json(
+          { error: "Invalid product ID" },
+          { status: 400 }
+        );
+      }
+    }
+
     if (!shippingInfo || !validateShippingInfo(shippingInfo)) {
       console.log('[ORDERS_POST] Invalid shipping info:', shippingInfo);
       return NextResponse.json(
