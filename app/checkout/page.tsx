@@ -103,7 +103,6 @@ export default function CheckoutPage() {
             cardNumber: formData.cardNumber,
             expiryDate: formData.expiryDate,
           },
-          savePaymentMethod,
         }),
       });
 

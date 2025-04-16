@@ -150,8 +150,18 @@ export async function POST(req: Request) {
     return NextResponse.json(order);
 
   } catch (error) {
-    console.error("[ORDERS_POST]", error);
-    return new NextResponse("Internal error", { status: 500 });
+    console.error("[ORDERS_POST] Error details:", {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : undefined,
+      error: error
+    });
+    return new NextResponse(
+      JSON.stringify({ 
+        error: "Internal error",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }), 
+      { status: 500 }
+    );
   }
 }
 

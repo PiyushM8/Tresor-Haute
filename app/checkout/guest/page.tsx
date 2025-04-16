@@ -66,7 +66,6 @@ export default function GuestCheckoutPage() {
             cardNumber: formData.cardNumber,
             expiryDate: formData.expiryDate,
           },
-          isGuest: true,
         }),
       });
 
