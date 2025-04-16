@@ -91,7 +91,7 @@ export async function POST(req: Request) {
       } catch (error) {
         console.error("[ORDERS_POST] Guest user creation error:", error);
         return NextResponse.json(
-          { error: "Failed to create guest user" },
+          { error: "Failed to create guest user", details: error instanceof Error ? error.message : "Unknown error" },
           { status: 500 }
         );
       }
