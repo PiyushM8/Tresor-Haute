@@ -76,29 +76,24 @@ export async function POST(req: Request) {
       try {
         console.log('[ORDERS_POST] Creating guest user...');
         const guestEmail = `guest_${Date.now()}@tresor-haute.com`;
-        const existingUser = await prisma.user.findUnique({
-          where: { email: guestEmail }
-        });
-
-        if (existingUser) {
-          console.log('[ORDERS_POST] Guest email already exists:', guestEmail);
-          return NextResponse.json(
-            { error: "Failed to create guest user" },
-            { status: 500 }
-          );
-        }
-
-        const guestUser = await prisma.user.create({
-          data: {
+        
+        // Create guest user with a fixed password since they won't need to log in
+        const guestUser = await prisma.user.upsert({
+          where: { email: guestEmail },
+          update: {
+            name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
+          },
+          create: {
             email: guestEmail,
             name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-            password: await bcrypt.hash(Math.random().toString(36), 10),
+            password: await bcrypt.hash('guest_password', 10),
             role: Role.USER
           }
         });
+        
         userId = guestUser.id;
         isGuest = true;
-        console.log('[ORDERS_POST] Guest user created:', { id: userId, isGuest });
+        console.log('[ORDERS_POST] Guest user created/updated:', { id: userId, isGuest });
       } catch (error) {
         console.error("[ORDERS_POST] Guest user creation error:", error);
         return NextResponse.json(
