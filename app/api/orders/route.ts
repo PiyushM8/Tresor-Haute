@@ -158,6 +158,8 @@ export async function POST(req: Request) {
     // Validate products and calculate total
     console.log('[ORDERS_POST] Validating products and stock...');
     let total = 0;
+    const validatedItems = [];
+    
     for (const item of items) {
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
@@ -172,12 +174,16 @@ export async function POST(req: Request) {
 
       if (product.stock < item.quantity) {
         return NextResponse.json(
-          { error: `Insufficient stock for product: ${product.name}` },
+          { error: `Insufficient stock for product: ${product.name}. Only ${product.stock} available.` },
           { status: 400 }
         );
       }
 
       total += product.price * item.quantity;
+      validatedItems.push({
+        ...item,
+        price: product.price, // Use the current product price
+      });
     }
     console.log('[ORDERS_POST] Products validated, total:', total);
 
@@ -189,7 +195,7 @@ export async function POST(req: Request) {
         total,
         status: OrderStatus.PENDING,
         items: {
-          create: items.map((item) => ({
+          create: validatedItems.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
             price: item.price,
@@ -253,6 +259,19 @@ export async function POST(req: Request) {
       )
     `;
 
+    // Update product stock
+    console.log('[ORDERS_POST] Updating product stock...');
+    for (const item of validatedItems) {
+      await prisma.product.update({
+        where: { id: item.productId },
+        data: {
+          stock: {
+            decrement: item.quantity,
+          },
+        },
+      });
+    }
+
     // Return the complete order with all relations
     const [completeOrder] = await prisma.$queryRaw<CompleteOrder[]>`
       SELECT
@@ -296,22 +315,7 @@ export async function POST(req: Request) {
       throw new Error('Failed to fetch created order');
     }
 
-    console.log('[ORDERS_POST] Order created:', order.id);
-
-    // Update product stock
-    console.log('[ORDERS_POST] Updating product stock...');
-    for (const item of items) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: {
-          stock: {
-            decrement: item.quantity,
-          },
-        },
-      });
-    }
-
-    console.log('[ORDERS_POST] Order creation successful');
+    console.log('[ORDERS_POST] Order created successfully:', order.id);
     return NextResponse.json(completeOrder);
   } catch (error) {
     console.error('[ORDERS_POST] Error creating order:', error);

@@ -102,12 +102,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
       const product = await response.json();
 
+      // Check stock availability
+      if (product.stock < quantity) {
+        throw new Error(`Only ${product.stock} items available in stock`);
+      }
+
       setItems(currentItems => {
         const existingItem = currentItems.find(item => item.id === productId);
         if (existingItem) {
+          const newQuantity = existingItem.quantity + quantity;
+          if (newQuantity > product.stock) {
+            throw new Error(`Only ${product.stock} items available in stock`);
+          }
           return currentItems.map(item =>
             item.id === productId
-              ? { ...item, quantity: item.quantity + quantity }
+              ? { ...item, quantity: newQuantity }
               : item
           );
         }
