@@ -1,17 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '../auth/auth-options';
+import { authOptions } from '@/app/api/auth/auth-options';
 import { prisma } from '@/lib/prisma';
-import { OrderStatus, Role, Prisma } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { OrderStatus, Role, Prisma } from '@prisma/client';
 
-// Define types for request body
-interface OrderItem {
-  productId: string;
-  quantity: number;
-}
-
-interface ShippingInfo {
+interface ShippingInfoInput {
   firstName: string;
   lastName: string;
   email: string;
@@ -20,308 +14,354 @@ interface ShippingInfo {
   postalCode: string;
 }
 
-interface PaymentInfo {
+interface PaymentInfoInput {
   cardNumber: string;
   expiryDate: string;
 }
 
-interface OrderRequestBody {
-  items: OrderItem[];
-  shippingInfo: ShippingInfo;
-  paymentInfo: PaymentInfo;
+interface OrderItemInput {
+  productId: string;
+  quantity: number;
+  price: number;
+}
+
+interface OrderInput {
+  items: OrderItemInput[];
+  shippingInfo: ShippingInfoInput;
+  paymentInfo: PaymentInfoInput;
+}
+
+interface CompleteOrder {
+  id: string;
+  userId: string;
+  total: number;
+  status: OrderStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  shippingInfo: {
+    id: string;
+    orderId: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    address: string;
+    city: string;
+    postalCode: string;
+  } | null;
+  paymentInfo: {
+    id: string;
+    orderId: string;
+    cardNumber: string;
+    expiryDate: string;
+  } | null;
+  items: Array<{
+    id: string;
+    orderId: string;
+    productId: string;
+    quantity: number;
+    price: number;
+    product: {
+      id: string;
+      name: string;
+      description: string;
+      price: number;
+      stock: number;
+      images: string[];
+      categoryId: string;
+      createdAt: Date;
+      updatedAt: Date;
+    };
+  }>;
+}
+
+interface AdminOrder extends CompleteOrder {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  };
 }
 
 export async function POST(req: Request) {
+  console.log('[ORDERS_POST] Starting order creation...');
   try {
-    console.log('[ORDERS_POST] Starting order creation...');
     const session = await getServerSession(authOptions);
-    const body: OrderRequestBody = await req.json();
+    const data: OrderInput = await req.json();
     console.log('[ORDERS_POST] Request body:', {
-      ...body,
-      paymentInfo: { ...body.paymentInfo, cardNumber: '[REDACTED]' }
+      ...data,
+      paymentInfo: { ...data.paymentInfo, cardNumber: '[REDACTED]' }
     });
 
-    // Validate required fields
-    const { items, shippingInfo, paymentInfo } = body;
+    const { items, shippingInfo, paymentInfo } = data;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      console.log('[ORDERS_POST] Invalid items:', items);
       return NextResponse.json(
-        { error: "Items are required" },
+        { error: 'Order must contain at least one item' },
         { status: 400 }
       );
     }
 
-    // Validate product IDs
+    if (!shippingInfo || !paymentInfo) {
+      return NextResponse.json(
+        { error: 'Shipping and payment information are required' },
+        { status: 400 }
+      );
+    }
+
+    let userId: string;
+
+    if (session?.user) {
+      userId = session.user.id;
+    } else {
+      console.log('[ORDERS_POST] Creating guest user...');
+      // Create a guest user
+      const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+      const guestUser = await prisma.user.create({
+        data: {
+          name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
+          email: shippingInfo.email,
+          password: hashedPassword,
+          role: Role.USER,
+        },
+      });
+      userId = guestUser.id;
+      console.log('[ORDERS_POST] Guest user created:', { id: userId });
+    }
+
+    // Validate products and calculate total
+    console.log('[ORDERS_POST] Validating products and stock...');
+    let total = 0;
     for (const item of items) {
-      if (!item.productId || typeof item.productId !== 'string') {
-        console.log('[ORDERS_POST] Invalid product ID:', item.productId);
+      const product = await prisma.product.findUnique({
+        where: { id: item.productId },
+      });
+
+      if (!product) {
         return NextResponse.json(
-          { error: "Invalid product ID" },
+          { error: `Product not found: ${item.productId}` },
+          { status: 404 }
+        );
+      }
+
+      if (product.stock < item.quantity) {
+        return NextResponse.json(
+          { error: `Insufficient stock for product: ${product.name}` },
           { status: 400 }
         );
       }
+
+      total += product.price * item.quantity;
     }
+    console.log('[ORDERS_POST] Products validated, total:', total);
 
-    if (!shippingInfo || !validateShippingInfo(shippingInfo)) {
-      console.log('[ORDERS_POST] Invalid shipping info:', shippingInfo);
-      return NextResponse.json(
-        { error: "Invalid shipping information" },
-        { status: 400 }
-      );
-    }
-
-    if (!paymentInfo || !validatePaymentInfo(paymentInfo)) {
-      console.log('[ORDERS_POST] Invalid payment info');
-      return NextResponse.json(
-        { error: "Invalid payment information" },
-        { status: 400 }
-      );
-    }
-
-    let userId = session?.user?.id;
-    let isGuest = false;
-
-    // Create guest user if no session
-    if (!userId) {
-      try {
-        console.log('[ORDERS_POST] Creating guest user...');
-        const guestEmail = `guest_${Date.now()}@tresor-haute.com`;
-        
-        // Create guest user with a fixed password since they won't need to log in
-        const guestUser = await prisma.user.upsert({
-          where: { email: guestEmail },
-          update: {
-            name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-          },
-          create: {
-            email: guestEmail,
-            name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-            password: await bcrypt.hash('guest_password', 10),
-            role: Role.USER
-          }
-        });
-        
-        userId = guestUser.id;
-        isGuest = true;
-        console.log('[ORDERS_POST] Guest user created/updated:', { id: userId, isGuest });
-      } catch (error) {
-        console.error("[ORDERS_POST] Guest user creation error:", error);
-        return NextResponse.json(
-          { error: "Failed to create guest user", details: error instanceof Error ? error.message : "Unknown error" },
-          { status: 500 }
-        );
-      }
-    }
-
-    // Create the order in a single transaction
-    try {
-      console.log('[ORDERS_POST] Creating order...');
-      
-      const order = await prisma.$transaction(async (tx) => {
-        // Calculate total and validate stock
-        let total = 0;
-
-        // Validate products and calculate total
-        for (const item of items) {
-          const product = await tx.product.findUnique({
-            where: { id: item.productId },
-            select: {
-              id: true,
-              price: true,
-              stock: true
-            }
-          });
-
-          if (!product) {
-            throw new Error(`Product ${item.productId} not found`);
-          }
-
-          if (product.stock < item.quantity) {
-            throw new Error(`Insufficient stock for product ${item.productId}`);
-          }
-
-          total += product.price * item.quantity;
-
-          // Update stock
-          await tx.$executeRaw`
-            UPDATE "Product"
-            SET stock = stock - ${item.quantity}
-            WHERE id = ${item.productId} AND stock >= ${item.quantity}
-          `;
-        }
-
-        // Create order
-        const [newOrder] = await tx.$queryRaw<[{ id: string }]>`
-          INSERT INTO orders (id, "userId", total, status, "isGuest", "createdAt", "updatedAt")
-          VALUES (
-            gen_random_uuid(),
-            ${userId},
-            ${total},
-            'PENDING',
-            ${isGuest},
-            NOW(),
-            NOW()
-          )
-          RETURNING id
-        `;
-
-        // Create order items
-        for (const item of items) {
-          const product = await tx.product.findUnique({
-            where: { id: item.productId },
-            select: { price: true }
-          });
-
-          if (!product) continue;
-
-          await tx.$executeRaw`
-            INSERT INTO order_items (id, "orderId", "productId", quantity, price, "createdAt", "updatedAt")
-            VALUES (
-              gen_random_uuid(),
-              ${newOrder.id},
-              ${item.productId},
-              ${item.quantity},
-              ${product.price},
-              NOW(),
-              NOW()
-            )
-          `;
-        }
-
-        // Create shipping info
-        await tx.$executeRaw`
-          INSERT INTO shipping_info (id, "orderId", "firstName", "lastName", email, address, city, "postalCode", "createdAt", "updatedAt")
-          VALUES (
-            gen_random_uuid(),
-            ${newOrder.id},
-            ${shippingInfo.firstName},
-            ${shippingInfo.lastName},
-            ${shippingInfo.email},
-            ${shippingInfo.address},
-            ${shippingInfo.city},
-            ${shippingInfo.postalCode},
-            NOW(),
-            NOW()
-          )
-        `;
-
-        // Create payment info
-        await tx.$executeRaw`
-          INSERT INTO payment_info (id, "orderId", "cardNumber", "expiryDate", "createdAt", "updatedAt")
-          VALUES (
-            gen_random_uuid(),
-            ${newOrder.id},
-            ${maskCardNumber(paymentInfo.cardNumber)},
-            ${paymentInfo.expiryDate},
-            NOW(),
-            NOW()
-          )
-        `;
-
-        // Get complete order
-        const [completeOrder] = await tx.$queryRaw<[any]>`
-          SELECT 
-            o.*,
-            json_build_object(
-              'id', u.id,
-              'email', u.email,
-              'name', u.name
-            ) as user,
-            json_agg(
-              json_build_object(
-                'id', oi.id,
-                'quantity', oi.quantity,
-                'price', oi.price,
-                'product', json_build_object(
-                  'id', p.id,
-                  'name', p.name,
-                  'price', p.price,
-                  'images', p.images
-                )
-              )
-            ) as items,
-            json_build_object(
-              'firstName', si."firstName",
-              'lastName', si."lastName",
-              'email', si.email,
-              'address', si.address,
-              'city', si.city,
-              'postalCode', si."postalCode"
-            ) as "shippingInfo",
-            json_build_object(
-              'cardNumber', pi."cardNumber",
-              'expiryDate', pi."expiryDate"
-            ) as "paymentInfo"
-          FROM orders o
-          LEFT JOIN "User" u ON o."userId" = u.id
-          LEFT JOIN order_items oi ON o.id = oi."orderId"
-          LEFT JOIN "Product" p ON oi."productId" = p.id
-          LEFT JOIN shipping_info si ON o.id = si."orderId"
-          LEFT JOIN payment_info pi ON o.id = pi."orderId"
-          WHERE o.id = ${newOrder.id}
-          GROUP BY o.id, u.id, si.id, pi.id
-        `;
-
-        return completeOrder;
-      });
-
-      console.log('[ORDERS_POST] Order created successfully:', order.id);
-      return NextResponse.json(order);
-    } catch (error) {
-      console.error("[ORDERS_POST] Order creation error:", error);
-      return NextResponse.json(
-        { 
-          error: "Failed to create order",
-          details: error instanceof Error ? error.message : "Unknown error"
+    // Create the order with its items
+    console.log('[ORDERS_POST] Creating order...');
+    const order = await prisma.order.create({
+      data: {
+        userId,
+        total,
+        status: OrderStatus.PENDING,
+        items: {
+          create: items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+          })),
         },
-        { status: 500 }
-      );
-    }
-  } catch (error) {
-    console.error("[ORDERS_POST] Error details:", error);
-    return NextResponse.json(
-      { 
-        error: "Internal error",
-        details: error instanceof Error ? error.message : "Unknown error"
       },
+      include: {
+        items: {
+          include: {
+            product: true,
+          },
+        },
+      },
+    });
+
+    // Create shipping info
+    await prisma.$queryRaw`
+      INSERT INTO shipping_info (
+        id,
+        "orderId",
+        "firstName",
+        "lastName",
+        email,
+        address,
+        city,
+        "postalCode",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        gen_random_uuid(),
+        ${order.id},
+        ${shippingInfo.firstName},
+        ${shippingInfo.lastName},
+        ${shippingInfo.email},
+        ${shippingInfo.address},
+        ${shippingInfo.city},
+        ${shippingInfo.postalCode},
+        NOW(),
+        NOW()
+      )
+    `;
+
+    // Create payment info
+    await prisma.$queryRaw`
+      INSERT INTO payment_info (
+        id,
+        "orderId",
+        "cardNumber",
+        "expiryDate",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        gen_random_uuid(),
+        ${order.id},
+        ${paymentInfo.cardNumber},
+        ${paymentInfo.expiryDate},
+        NOW(),
+        NOW()
+      )
+    `;
+
+    // Return the complete order with all relations
+    const [completeOrder] = await prisma.$queryRaw<CompleteOrder[]>`
+      SELECT
+        o.*,
+        json_build_object(
+          'id', si.id,
+          'orderId', si."orderId",
+          'firstName', si."firstName",
+          'lastName', si."lastName",
+          'email', si.email,
+          'address', si.address,
+          'city', si.city,
+          'postalCode', si."postalCode"
+        ) as "shippingInfo",
+        json_build_object(
+          'id', pi.id,
+          'orderId', pi."orderId",
+          'cardNumber', pi."cardNumber",
+          'expiryDate', pi."expiryDate"
+        ) as "paymentInfo",
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'orderId', oi."orderId",
+            'productId', oi."productId",
+            'quantity', oi.quantity,
+            'price', oi.price,
+            'product', p
+          )
+        ) as items
+      FROM orders o
+      LEFT JOIN shipping_info si ON si."orderId" = o.id
+      LEFT JOIN payment_info pi ON pi."orderId" = o.id
+      LEFT JOIN order_items oi ON oi."orderId" = o.id
+      LEFT JOIN products p ON p.id = oi."productId"
+      WHERE o.id = ${order.id}
+      GROUP BY o.id, si.id, pi.id
+    `;
+
+    if (!completeOrder) {
+      throw new Error('Failed to fetch created order');
+    }
+
+    console.log('[ORDERS_POST] Order created:', order.id);
+
+    // Update product stock
+    console.log('[ORDERS_POST] Updating product stock...');
+    for (const item of items) {
+      await prisma.product.update({
+        where: { id: item.productId },
+        data: {
+          stock: {
+            decrement: item.quantity,
+          },
+        },
+      });
+    }
+
+    console.log('[ORDERS_POST] Order creation successful');
+    return NextResponse.json(completeOrder);
+  } catch (error) {
+    console.error('[ORDERS_POST] Error creating order:', error);
+    return NextResponse.json(
+      { error: 'Failed to create order', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
 }
 
-// Validation helpers
-function validateShippingInfo(info: ShippingInfo): boolean {
-  return !!(
-    info.firstName?.trim() &&
-    info.lastName?.trim() &&
-    info.email?.trim() &&
-    info.email.includes('@') &&
-    info.address?.trim() &&
-    info.city?.trim() &&
-    info.postalCode?.trim()
-  );
-}
-
-function validatePaymentInfo(info: PaymentInfo): boolean {
-  return !!(
-    info.cardNumber?.trim() &&
-    info.cardNumber.replace(/\s/g, '').length >= 15 &&
-    info.expiryDate?.trim() &&
-    /^\d{2}\/\d{2}$/.test(info.expiryDate)
-  );
-}
-
-function maskCardNumber(cardNumber: string): string {
-  const cleaned = cardNumber.replace(/\s/g, '');
-  return `****${cleaned.slice(-4)}`;
-}
-
-export async function GET(request: Request) {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    
-    if (!session) {
+    const { searchParams } = new URL(req.url);
+    const orderId = searchParams.get('orderId');
+    const email = searchParams.get('email');
+
+    // If orderId is provided, fetch specific order
+    if (orderId) {
+      const [order] = await prisma.$queryRaw<CompleteOrder[]>`
+        SELECT
+          o.*,
+          json_build_object(
+            'id', si.id,
+            'orderId', si."orderId",
+            'firstName', si."firstName",
+            'lastName', si."lastName",
+            'email', si.email,
+            'address', si.address,
+            'city', si.city,
+            'postalCode', si."postalCode"
+          ) as "shippingInfo",
+          json_build_object(
+            'id', pi.id,
+            'orderId', pi."orderId",
+            'cardNumber', pi."cardNumber",
+            'expiryDate', pi."expiryDate"
+          ) as "paymentInfo",
+          json_agg(
+            json_build_object(
+              'id', oi.id,
+              'orderId', oi."orderId",
+              'productId', oi."productId",
+              'quantity', oi.quantity,
+              'price', oi.price,
+              'product', p
+            )
+          ) as items
+        FROM orders o
+        LEFT JOIN shipping_info si ON si."orderId" = o.id
+        LEFT JOIN payment_info pi ON pi."orderId" = o.id
+        LEFT JOIN order_items oi ON oi."orderId" = o.id
+        LEFT JOIN products p ON p.id = oi."productId"
+        WHERE o.id = ${orderId}
+        GROUP BY o.id, si.id, pi.id
+      `;
+
+      if (!order) {
+        return NextResponse.json(
+          { error: 'Order not found' },
+          { status: 404 }
+        );
+      }
+
+      // If user is not logged in, verify email matches
+      if (!session?.user && order.shippingInfo?.email !== email) {
+        return NextResponse.json(
+          { error: 'Unauthorized' },
+          { status: 401 }
+        );
+      }
+
+      return NextResponse.json(order);
+    }
+
+    // If user is not logged in, return error
+    if (!session?.user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -330,52 +370,98 @@ export async function GET(request: Request) {
 
     // If user is admin, return all orders
     if (session.user.role === Role.ADMIN) {
-      const orders = await prisma.order.findMany({
-        include: {
-          items: {
-            include: {
-              product: true
-            }
-          },
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          }
-        },
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+      const orders = await prisma.$queryRaw<AdminOrder[]>`
+        SELECT
+          o.*,
+          json_build_object(
+            'id', si.id,
+            'orderId', si."orderId",
+            'firstName', si."firstName",
+            'lastName', si."lastName",
+            'email', si.email,
+            'address', si.address,
+            'city', si.city,
+            'postalCode', si."postalCode"
+          ) as "shippingInfo",
+          json_build_object(
+            'id', pi.id,
+            'orderId', pi."orderId",
+            'cardNumber', pi."cardNumber",
+            'expiryDate', pi."expiryDate"
+          ) as "paymentInfo",
+          json_agg(
+            json_build_object(
+              'id', oi.id,
+              'orderId', oi."orderId",
+              'productId', oi."productId",
+              'quantity', oi.quantity,
+              'price', oi.price,
+              'product', p
+            )
+          ) as items,
+          json_build_object(
+            'id', u.id,
+            'name', u.name,
+            'email', u.email
+          ) as user
+        FROM orders o
+        LEFT JOIN shipping_info si ON si."orderId" = o.id
+        LEFT JOIN payment_info pi ON pi."orderId" = o.id
+        LEFT JOIN order_items oi ON oi."orderId" = o.id
+        LEFT JOIN products p ON p.id = oi."productId"
+        LEFT JOIN users u ON u.id = o."userId"
+        GROUP BY o.id, si.id, pi.id, u.id
+        ORDER BY o."createdAt" DESC
+      `;
+
       return NextResponse.json(orders);
     }
 
-    // If regular user, return only their orders
-    const orders = await prisma.order.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      include: {
-        items: {
-          include: {
-            product: true
-          }
-        }
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+    // If regular user, return their orders
+    const orders = await prisma.$queryRaw<CompleteOrder[]>`
+      SELECT
+        o.*,
+        json_build_object(
+          'id', si.id,
+          'orderId', si."orderId",
+          'firstName', si."firstName",
+          'lastName', si."lastName",
+          'email', si.email,
+          'address', si.address,
+          'city', si.city,
+          'postalCode', si."postalCode"
+        ) as "shippingInfo",
+        json_build_object(
+          'id', pi.id,
+          'orderId', pi."orderId",
+          'cardNumber', pi."cardNumber",
+          'expiryDate', pi."expiryDate"
+        ) as "paymentInfo",
+        json_agg(
+          json_build_object(
+            'id', oi.id,
+            'orderId', oi."orderId",
+            'productId', oi."productId",
+            'quantity', oi.quantity,
+            'price', oi.price,
+            'product', p
+          )
+        ) as items
+      FROM orders o
+      LEFT JOIN shipping_info si ON si."orderId" = o.id
+      LEFT JOIN payment_info pi ON pi."orderId" = o.id
+      LEFT JOIN order_items oi ON oi."orderId" = o.id
+      LEFT JOIN products p ON p.id = oi."productId"
+      WHERE o."userId" = ${session.user.id}
+      GROUP BY o.id, si.id, pi.id
+      ORDER BY o."createdAt" DESC
+    `;
+
     return NextResponse.json(orders);
   } catch (error) {
-    console.error('Error fetching orders:', error);
+    console.error('[ORDERS_GET] Error fetching orders:', error);
     return NextResponse.json(
-      { 
-        error: 'Failed to fetch orders',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      },
+      { error: 'Failed to fetch orders', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
