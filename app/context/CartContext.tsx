@@ -93,6 +93,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const addItem = async (productId: string, quantity: number) => {
     if (!isInitialized) return;
+    if (!productId) {
+      throw new Error('Product ID is required');
+    }
 
     try {
       // Fetch product details
@@ -101,6 +104,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Failed to fetch product');
       }
       const product = await response.json();
+
+      if (!product || !product.id) {
+        throw new Error('Invalid product data received');
+      }
 
       // Check stock availability
       if (product.stock < quantity) {
@@ -148,7 +155,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateQuantity = async (productId: string, quantity: number) => {
+    if (!productId) {
+      throw new Error('Product ID is required');
+    }
+
     try {
+      // Fetch product details to validate stock
+      const response = await fetch(`/api/products/${productId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch product');
+      }
+      const product = await response.json();
+
+      if (quantity > product.stock) {
+        throw new Error(`Only ${product.stock} items available in stock`);
+      }
+
       setItems(currentItems =>
         currentItems.map(item =>
           item.id === productId

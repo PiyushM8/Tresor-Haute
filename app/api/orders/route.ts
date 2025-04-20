@@ -161,8 +161,21 @@ export async function POST(req: Request) {
     const validatedItems = [];
     
     for (const item of items) {
+      if (!item.productId) {
+        return NextResponse.json(
+          { error: 'Product ID is required for all items' },
+          { status: 400 }
+        );
+      }
+
       const product = await prisma.product.findUnique({
         where: { id: item.productId },
+        select: {
+          id: true,
+          name: true,
+          price: true,
+          stock: true,
+        },
       });
 
       if (!product) {
@@ -181,10 +194,19 @@ export async function POST(req: Request) {
 
       total += product.price * item.quantity;
       validatedItems.push({
-        ...item,
-        price: product.price, // Use the current product price
+        productId: product.id,
+        quantity: item.quantity,
+        price: product.price,
       });
     }
+
+    if (validatedItems.length === 0) {
+      return NextResponse.json(
+        { error: 'No valid items in the order' },
+        { status: 400 }
+      );
+    }
+
     console.log('[ORDERS_POST] Products validated, total:', total);
 
     // Create the order with its items
@@ -195,11 +217,7 @@ export async function POST(req: Request) {
         total,
         status: OrderStatus.PENDING,
         items: {
-          create: validatedItems.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            price: item.price,
-          })),
+          create: validatedItems,
         },
       },
       include: {
