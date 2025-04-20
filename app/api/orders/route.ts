@@ -114,18 +114,45 @@ export async function POST(req: Request) {
       userId = session.user.id;
     } else {
       console.log('[ORDERS_POST] Creating guest user...');
-      // Create a guest user
-      const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
-      const guestUser = await prisma.user.create({
-        data: {
-          name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
-          email: shippingInfo.email,
-          password: hashedPassword,
-          role: Role.USER,
-        },
-      });
-      userId = guestUser.id;
-      console.log('[ORDERS_POST] Guest user created:', { id: userId });
+      try {
+        // First try to find an existing user with the email
+        const existingUser = await prisma.user.findUnique({
+          where: { email: shippingInfo.email },
+        });
+
+        if (existingUser) {
+          userId = existingUser.id;
+          console.log('[ORDERS_POST] Using existing user:', { id: userId });
+        } else {
+          // If no user exists, create a new one with a unique email
+          const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+          const guestUser = await prisma.user.create({
+            data: {
+              name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
+              email: shippingInfo.email,
+              password: hashedPassword,
+              role: Role.USER,
+            },
+          });
+          userId = guestUser.id;
+          console.log('[ORDERS_POST] Guest user created:', { id: userId });
+        }
+      } catch (error) {
+        console.error('[ORDERS_POST] Error handling guest user:', error);
+        // If there's still a conflict, create a user with a modified email
+        const uniqueEmail = `${shippingInfo.email.split('@')[0]}+${Date.now()}@${shippingInfo.email.split('@')[1]}`;
+        const hashedPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+        const guestUser = await prisma.user.create({
+          data: {
+            name: `${shippingInfo.firstName} ${shippingInfo.lastName}`,
+            email: uniqueEmail,
+            password: hashedPassword,
+            role: Role.USER,
+          },
+        });
+        userId = guestUser.id;
+        console.log('[ORDERS_POST] Guest user created with unique email:', { id: userId, email: uniqueEmail });
+      }
     }
 
     // Validate products and calculate total
