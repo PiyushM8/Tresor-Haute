@@ -87,14 +87,22 @@ export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     const data: OrderInput = await req.json();
-    console.log('[ORDERS_POST] Request body:', {
+    
+    // Log request data (excluding sensitive information)
+    console.log('[ORDERS_POST] Request data:', {
       ...data,
-      paymentInfo: { ...data.paymentInfo, cardNumber: '[REDACTED]' }
+      paymentInfo: { ...data.paymentInfo, cardNumber: '[REDACTED]' },
+      items: data.items?.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity
+      }))
     });
 
     const { items, shippingInfo, paymentInfo } = data;
 
+    // Validate request data
     if (!items || !Array.isArray(items) || items.length === 0) {
+      console.error('[ORDERS_POST] Invalid items:', items);
       return NextResponse.json(
         { error: 'Order must contain at least one item' },
         { status: 400 }
@@ -102,8 +110,28 @@ export async function POST(req: Request) {
     }
 
     if (!shippingInfo || !paymentInfo) {
+      console.error('[ORDERS_POST] Missing shipping or payment info:', { shippingInfo, paymentInfo });
       return NextResponse.json(
         { error: 'Shipping and payment information are required' },
+        { status: 400 }
+      );
+    }
+
+    // Validate shipping info
+    if (!shippingInfo.firstName || !shippingInfo.lastName || !shippingInfo.email || 
+        !shippingInfo.address || !shippingInfo.city || !shippingInfo.postalCode) {
+      console.error('[ORDERS_POST] Invalid shipping info:', shippingInfo);
+      return NextResponse.json(
+        { error: 'All shipping information fields are required' },
+        { status: 400 }
+      );
+    }
+
+    // Validate payment info
+    if (!paymentInfo.cardNumber || !paymentInfo.expiryDate) {
+      console.error('[ORDERS_POST] Invalid payment info:', { ...paymentInfo, cardNumber: '[REDACTED]' });
+      return NextResponse.json(
+        { error: 'All payment information fields are required' },
         { status: 400 }
       );
     }
@@ -112,6 +140,7 @@ export async function POST(req: Request) {
 
     if (session?.user) {
       userId = session.user.id;
+      console.log('[ORDERS_POST] Using authenticated user:', userId);
     } else {
       console.log('[ORDERS_POST] Creating guest user...');
       try {
@@ -162,6 +191,7 @@ export async function POST(req: Request) {
     
     for (const item of items) {
       if (!item.productId) {
+        console.error('[ORDERS_POST] Missing product ID in item:', item);
         return NextResponse.json(
           { error: 'Product ID is required for all items' },
           { status: 400 }
@@ -179,6 +209,7 @@ export async function POST(req: Request) {
       });
 
       if (!product) {
+        console.error('[ORDERS_POST] Product not found:', item.productId);
         return NextResponse.json(
           { error: `Product not found: ${item.productId}` },
           { status: 404 }
@@ -186,6 +217,7 @@ export async function POST(req: Request) {
       }
 
       if (product.stock < item.quantity) {
+        console.error('[ORDERS_POST] Insufficient stock:', { product, requestedQuantity: item.quantity });
         return NextResponse.json(
           { error: `Insufficient stock for product: ${product.name}. Only ${product.stock} available.` },
           { status: 400 }
@@ -201,6 +233,7 @@ export async function POST(req: Request) {
     }
 
     if (validatedItems.length === 0) {
+      console.error('[ORDERS_POST] No valid items in order');
       return NextResponse.json(
         { error: 'No valid items in the order' },
         { status: 400 }
@@ -229,65 +262,106 @@ export async function POST(req: Request) {
       },
     });
 
+    console.log('[ORDERS_POST] Order created:', order.id);
+
     // Create shipping info
-    await prisma.$queryRaw`
-      INSERT INTO shipping_info (
-        id,
-        "orderId",
-        "firstName",
-        "lastName",
-        email,
-        address,
-        city,
-        "postalCode",
-        "createdAt",
-        "updatedAt"
-      )
-      VALUES (
-        gen_random_uuid(),
-        ${order.id},
-        ${shippingInfo.firstName},
-        ${shippingInfo.lastName},
-        ${shippingInfo.email},
-        ${shippingInfo.address},
-        ${shippingInfo.city},
-        ${shippingInfo.postalCode},
-        NOW(),
-        NOW()
-      )
-    `;
+    try {
+      await prisma.$queryRaw`
+        INSERT INTO shipping_info (
+          id,
+          "orderId",
+          "firstName",
+          "lastName",
+          email,
+          address,
+          city,
+          "postalCode",
+          "createdAt",
+          "updatedAt"
+        )
+        VALUES (
+          gen_random_uuid(),
+          ${order.id},
+          ${shippingInfo.firstName},
+          ${shippingInfo.lastName},
+          ${shippingInfo.email},
+          ${shippingInfo.address},
+          ${shippingInfo.city},
+          ${shippingInfo.postalCode},
+          NOW(),
+          NOW()
+        )
+      `;
+      console.log('[ORDERS_POST] Shipping info created for order:', order.id);
+    } catch (error) {
+      console.error('[ORDERS_POST] Error creating shipping info:', error);
+      // Clean up the order if shipping info creation fails
+      await prisma.order.delete({ where: { id: order.id } });
+      throw new Error('Failed to create shipping information');
+    }
 
     // Create payment info
-    await prisma.$queryRaw`
-      INSERT INTO payment_info (
-        id,
-        "orderId",
-        "cardNumber",
-        "expiryDate",
-        "createdAt",
-        "updatedAt"
-      )
-      VALUES (
-        gen_random_uuid(),
-        ${order.id},
-        ${paymentInfo.cardNumber},
-        ${paymentInfo.expiryDate},
-        NOW(),
-        NOW()
-      )
-    `;
+    try {
+      await prisma.$queryRaw`
+        INSERT INTO payment_info (
+          id,
+          "orderId",
+          "cardNumber",
+          "expiryDate",
+          "createdAt",
+          "updatedAt"
+        )
+        VALUES (
+          gen_random_uuid(),
+          ${order.id},
+          ${paymentInfo.cardNumber},
+          ${paymentInfo.expiryDate},
+          NOW(),
+          NOW()
+        )
+      `;
+      console.log('[ORDERS_POST] Payment info created for order:', order.id);
+    } catch (error) {
+      console.error('[ORDERS_POST] Error creating payment info:', error);
+      // Clean up the order and shipping info if payment info creation fails
+      await prisma.$queryRaw`DELETE FROM shipping_info WHERE "orderId" = ${order.id}`;
+      await prisma.order.delete({ where: { id: order.id } });
+      throw new Error('Failed to create payment information');
+    }
 
     // Update product stock
     console.log('[ORDERS_POST] Updating product stock...');
     for (const item of validatedItems) {
-      await prisma.product.update({
-        where: { id: item.productId },
-        data: {
-          stock: {
-            decrement: item.quantity,
+      try {
+        await prisma.product.update({
+          where: { id: item.productId },
+          data: {
+            stock: {
+              decrement: item.quantity,
+            },
           },
-        },
-      });
+        });
+        console.log('[ORDERS_POST] Stock updated for product:', item.productId);
+      } catch (error) {
+        console.error('[ORDERS_POST] Error updating stock for product:', item.productId, error);
+        // Revert stock updates for previously processed items
+        for (const processedItem of validatedItems) {
+          if (processedItem.productId === item.productId) break;
+          await prisma.product.update({
+            where: { id: processedItem.productId },
+            data: {
+              stock: {
+                increment: processedItem.quantity,
+              },
+            },
+          });
+        }
+        // Clean up the order and related info
+        await prisma.$queryRaw`DELETE FROM payment_info WHERE "orderId" = ${order.id}`;
+        await prisma.$queryRaw`DELETE FROM shipping_info WHERE "orderId" = ${order.id}`;
+        await prisma.order.delete({ where: { id: order.id } });
+        throw new Error('Failed to update product stock');
+      }
     }
 
     // Return the complete order with all relations
@@ -330,6 +404,7 @@ export async function POST(req: Request) {
     `;
 
     if (!completeOrder) {
+      console.error('[ORDERS_POST] Failed to fetch created order:', order.id);
       throw new Error('Failed to fetch created order');
     }
 
@@ -338,7 +413,11 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error('[ORDERS_POST] Error creating order:', error);
     return NextResponse.json(
-      { error: 'Failed to create order', details: error instanceof Error ? error.message : 'Unknown error' },
+      { 
+        error: 'Failed to create order', 
+        details: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      },
       { status: 500 }
     );
   }
